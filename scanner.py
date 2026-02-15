@@ -121,7 +121,7 @@ def validate_number_against_sets(number, total, candidate_sets=None):
 
 
 def process_image(img_path, reader, index, stamp_template, hash_db=None,
-                  verbose=False):
+                  verbose=False, use_cache=True):
     """
     Process one card image. Returns a dict with all extracted fields.
 
@@ -139,8 +139,11 @@ def process_image(img_path, reader, index, stamp_template, hash_db=None,
     # Run card detection + perspective correction on all inputs
     img, card_detected = detect_and_crop_card(img)
     if card_detected:
-        # Overwrite temp file so downstream steps use corrected image
-        cv2.imwrite(str(img_path), img)
+        # Overwrite temp file so downstream steps use corrected image.
+        # Guard: never overwrite reference images (batch/test mode).
+        ref_dir = str(Path(__file__).parent / "data" / "Ref Images")
+        if not str(img_path).startswith(ref_dir):
+            cv2.imwrite(str(img_path), img)
 
     result = {
         "file": img_path.name,
@@ -177,6 +180,14 @@ def process_image(img_path, reader, index, stamp_template, hash_db=None,
                 result["total"] = match.group(2)
                 result["num_conf"] = round(conf * 100, 1)
                 break
+
+    # ── Stamp Detection ──
+    # Must run before pricing (determines 1st Edition flag).
+    # Skip on reference PNGs — they have no physical stamp.
+    if stamp_template is not None:
+        is_1st, stamp_conf_raw = check_stamp(img, result["card_type"], stamp_template)
+        result["stamp_1st"] = is_1st
+        result["stamp_conf"] = stamp_conf_raw
 
     # ── Image Hash Matching ──
     hash_result = None
@@ -272,7 +283,7 @@ def process_image(img_path, reader, index, stamp_template, hash_db=None,
             result["card_id"],
             is_1st_edition=result["stamp_1st"],
             rarity=result.get("rarity", "?"),
-            use_cache=True,  # Default to batch mode; server.py can override
+            use_cache=use_cache,
         )
         result["price"] = pricing["price"]
         result["price_variant"] = pricing["variant"]

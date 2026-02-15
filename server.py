@@ -383,21 +383,13 @@ def _run_scan(img_path: str, use_cache: bool) -> dict:
             stamp_template=scanner_resources["stamp_template"],
             hash_db=scanner_resources["hash_db"],
             verbose=False,
+            use_cache=use_cache,
         )
 
         elapsed = time.time() - t0
         result["time"] = round(elapsed, 2)
 
-        # ── Apply pricing cache logic ──
-        # process_image() already calls fetch_live_pricing() internally.
-        # To integrate the cache, you'll add use_cache as a parameter to
-        # process_image(), or replace its pricing call with
-        # fetch_cached_pricing(). For now, we tag the result so the
-        # dashboard knows the mode.
-        #
-        # TODO: Wire fetch_cached_pricing() into scanner.py's pricing step.
-        #       Until then, this flag is informational only.
-        result["_cached"] = False
+        # Tag pricing mode for dashboard display
         result["_pricing_mode"] = "batch" if use_cache else "single"
 
         logger.info(

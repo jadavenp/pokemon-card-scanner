@@ -314,5 +314,3 @@ def extract_number(img, reader, card_type="pokemon"):
         )
 
     return best_match[0], best_match[1], round(best_match[2] * 100, 1)
-
-    return best_match[0], best_match[1], round(best_match[2] * 100, 1)

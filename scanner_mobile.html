@@ -925,27 +925,34 @@ function captureFrame() {
   const sw = Math.min(cropW, srcW - sx);
   const sh = Math.min(cropH, srcH - sy);
 
-  // Resize cropped region to max 800px on the longest side.
-  // The guide rectangle is portrait (2.5:3.5), so height should always
-  // be the larger dimension. If clamping distorted the aspect, force
-  // portrait card proportions to prevent landscape outputs.
+  // P0 FIX: Force portrait canvas using the card aspect ratio directly.
+  // Previous fix tried to re-derive finalH from clamped sw, but that
+  // still produced landscape when finalH got re-capped by video bounds.
+  // Solution: ignore the crop ratio entirely for canvas dimensions —
+  // always output at the known card aspect (2.5:3.5 = portrait).
+  // drawImage stretches the crop to fit, which is fine — slight stretch
+  // from clamped crops is negligible vs a rotated image breaking the pipeline.
   const MAX_DIM = 800;
+  const targetAspect = cardAspect; // 2.5 / 3.5 ≈ 0.714
   let destW, destH;
 
-  // Guard: if clamping made the crop wider than tall, re-derive
-  // height from the card aspect ratio to maintain portrait orientation.
-  let finalW = sw;
-  let finalH = sh;
-  if (sw > sh) {
-    // Clamping clipped the height — restore card proportions
-    finalH = Math.round(sw / cardAspect);
-    // But don't exceed the video source
-    if (finalH > srcH - sy) finalH = srcH - sy;
+  // Always portrait: height is the long edge
+  destH = Math.min(sh, MAX_DIM);
+  destW = Math.round(destH * targetAspect);
+
+  // Safety cap (unlikely for cards, but defensive)
+  if (destW > MAX_DIM) {
+    destW = MAX_DIM;
+    destH = Math.round(destW / targetAspect);
   }
 
-  // Scale so the longest dimension (height) fits within MAX_DIM
-  destH = Math.min(finalH, MAX_DIM);
-  destW = Math.round(destH * (finalW / finalH));
+  // ── Diagnostic logging (remove after Phase 2 testing) ──
+  console.log('[captureFrame] video:', srcW + 'x' + srcH,
+    '| container:', contW + 'x' + contH,
+    '| crop:', cropW + 'x' + cropH,
+    '| clamped:', sw + 'x' + sh,
+    '| canvas:', destW + 'x' + destH,
+    '| portrait:', destH > destW ? 'YES' : 'NO (BUG!)');
 
   canvas.width = destW;
   canvas.height = destH;

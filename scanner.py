@@ -116,6 +116,63 @@ def validate_number_against_sets(number, total, candidate_sets=None):
     return matching
 
 
+def _run_hash_match(img, hash_db, index, result, verbose=False):
+    """
+    Run perceptual hash matching against the hash database.
+
+    Fast path (~50ms): if hash matches confidently, populates result with
+    card identity from the database, skipping the need for OCR.
+
+    Args:
+        img: OpenCV BGR image (numpy array)
+        hash_db: loaded hash database (or None to skip)
+        index: card index database
+        result: mutable result dict — updated in place with hash fields
+        verbose: print debug output
+
+    Returns:
+        (hash_result, hash_identified)
+        - hash_result: raw match dict from match_card_image(), or None
+        - hash_identified: True if card was confidently identified via hash
+    """
+    if hash_db is None:
+        return None, False
+
+    hash_result = match_card_image(img, hash_db)
+    hash_identified = False
+
+    if hash_result["match"]:
+        result["hash_match"] = hash_result["card_id"]
+        result["hash_distance"] = hash_result["distance"]
+        result["hash_confident"] = hash_result["confident"]
+
+        if verbose and hash_result["candidates"]:
+            top = hash_result["candidates"][0]
+            print(f"    [hash] best={top['card_id']} dist={top['distance']} "
+                  f"(p={top['distances']['phash']} d={top['distances']['dhash']} "
+                  f"w={top['distances']['whash']})"
+                  f"{' CONFIDENT' if top['confident'] else ''}")
+
+        # Confident hash match → pull card identity from DB
+        if hash_result["confident"]:
+            card_data = index.get("by_id", {}).get(hash_result["card_id"])
+            if card_data:
+                result["card_id"] = hash_result["card_id"]
+                result["name"] = hash_result["name"]
+                set_id = hash_result["card_id"].rsplit("-", 1)[0] if "-" in hash_result["card_id"] else ""
+                result["set_name"] = SET_NAMES.get(set_id, set_id)
+                result["rarity"] = card_data.get("rarity", "?")
+                result["number"] = card_data.get("number", "")
+                # Pull set total from card data (pokemontcg.io stores this in set.printedTotal)
+                card_set = card_data.get("set", {})
+                result["total"] = str(card_set.get("printedTotal", "")) if isinstance(card_set, dict) else None
+                result["name_conf"] = 100.0  # DB-sourced, not OCR
+                result["id_method"] = "hash"
+                hash_identified = True
+
+    return hash_result, hash_identified
+
+
 def process_image(img_path, reader, index, stamp_template, hash_db=None,
                   verbose=False, use_cache=True):
     """
@@ -155,41 +212,7 @@ def process_image(img_path, reader, index, stamp_template, hash_db=None,
     }
 
     # ── Image Hash Matching (FAST PATH — ~50ms) ──
-    # Run before OCR. If hash matches confidently, skip the expensive
-    # OCR pipeline (~1-2s) and pull card identity from the database.
-    hash_result = None
-    hash_identified = False
-
-    if hash_db is not None:
-        hash_result = match_card_image(img, hash_db)
-        if hash_result["match"]:
-            result["hash_match"] = hash_result["card_id"]
-            result["hash_distance"] = hash_result["distance"]
-            result["hash_confident"] = hash_result["confident"]
-
-            if verbose and hash_result["candidates"]:
-                top = hash_result["candidates"][0]
-                print(f"    [hash] best={top['card_id']} dist={top['distance']} "
-                      f"(p={top['distances']['phash']} d={top['distances']['dhash']} "
-                      f"w={top['distances']['whash']})"
-                      f"{' CONFIDENT' if top['confident'] else ''}")
-
-            # Confident hash match → skip OCR, use DB for card identity
-            if hash_result["confident"]:
-                card_data = index.get("by_id", {}).get(hash_result["card_id"])
-                if card_data:
-                    result["card_id"] = hash_result["card_id"]
-                    result["name"] = hash_result["name"]
-                    set_id = hash_result["card_id"].rsplit("-", 1)[0] if "-" in hash_result["card_id"] else ""
-                    result["set_name"] = SET_NAMES.get(set_id, set_id)
-                    result["rarity"] = card_data.get("rarity", "?")
-                    result["number"] = card_data.get("number", "")
-                    # Pull set total from card data (pokemontcg.io stores this in set.printedTotal)
-                    card_set = card_data.get("set", {})
-                    result["total"] = str(card_set.get("printedTotal", "")) if isinstance(card_set, dict) else None
-                    result["name_conf"] = 100.0  # DB-sourced, not OCR
-                    result["id_method"] = "hash"
-                    hash_identified = True
+    hash_result, hash_identified = _run_hash_match(img, hash_db, index, result, verbose)
 
     # ── OCR Pipeline (SLOW PATH — ~1-2s) ──
     # Only runs if hash didn't confidently identify the card.

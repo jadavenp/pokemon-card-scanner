@@ -32,7 +32,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # prettytable is lazy-imported in print_summary_table() so that
 # server.py can import process_image() without this dependency.
 
-from config import IMAGE_DIR, SET_NAMES, VARIANT_DISPLAY, CONFIDENCE_NAME_WEIGHT, CONFIDENCE_NUMBER_WEIGHT, CONFIDENCE_HASH_WEIGHT, CONFIDENCE_STAMP_WEIGHT, KNOWN_SET_TOTALS
+from config import IMAGE_DIR, SET_NAMES, VINTAGE_SET_IDS, VARIANT_DISPLAY, CONFIDENCE_NAME_WEIGHT, CONFIDENCE_NUMBER_WEIGHT, CONFIDENCE_HASH_WEIGHT, CONFIDENCE_STAMP_WEIGHT, KNOWN_SET_TOTALS
 from database import load_database, lookup_card, lookup_by_name, get_set_id
 from ocr import detect_card_type, extract_name, extract_number
 from stamp import load_stamp_template, check_stamp
@@ -217,14 +217,6 @@ def process_image(img_path, reader, index, stamp_template, hash_db=None,
                     result["num_conf"] = round(conf * 100, 1)
                     break
 
-    # ── Stamp Detection ──
-    # Must run before pricing (determines 1st Edition flag).
-    # Runs on all physical scans regardless of identification method.
-    if stamp_template is not None:
-        is_1st, stamp_conf_raw = check_stamp(img, result.get("card_type") or "pokemon", stamp_template)
-        result["stamp_1st"] = is_1st
-        result["stamp_conf"] = stamp_conf_raw
-
     # ── Database Lookup + Identification ──
     # If hash already identified the card, skip to pricing.
     # Otherwise, use OCR results to find the card in the database.
@@ -295,6 +287,20 @@ def process_image(img_path, reader, index, stamp_template, hash_db=None,
                     result["number"] = card.get("number", result["number"])
                     result["id_method"] = f"name_only ({len(name_matches)} candidates)"
                     ocr_matched = True
+
+    # ── Stamp Detection (gated) ──
+    # Only vintage WOTC-era sets (Base through Neo Destiny) had 1st Edition
+    # stamps. Skip the ~100ms template matching on modern cards.
+    if stamp_template is not None and ocr_matched and result["card_id"]:
+        set_id = result["card_id"].rsplit("-", 1)[0] if "-" in result["card_id"] else ""
+        if set_id in VINTAGE_SET_IDS:
+            is_1st, stamp_conf_raw = check_stamp(
+                img, result.get("card_type") or "pokemon", stamp_template
+            )
+            result["stamp_1st"] = is_1st
+            result["stamp_conf"] = stamp_conf_raw
+        elif verbose:
+            print(f"    [stamp] skipped — {set_id} is not a vintage set")
 
     # ── Compute identification confidence ──
     id_confidence = compute_identification_confidence(result)

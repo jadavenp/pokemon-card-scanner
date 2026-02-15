@@ -153,6 +153,7 @@ SET_NAMES = {
     "sv5": "Temporal Forces", "sv6": "Twilight Masquerade",
     "sv6pt5": "Shrouded Fable", "sv7": "Stellar Crown",
     "sv8": "Surging Sparks",
+    "sv8pt5": "Prismatic Evolutions",
 }
 
 VINTAGE_SET_IDS = {

@@ -223,7 +223,8 @@ def main():
             webbrowser.open(f"file://{output_path.resolve()}")
             print(f"\nResults opened in browser: {output_path}")
         except ImportError:
-            print("\nCould not import scanner_ui for HTML generation.")
+            print("\nWarning: scanner_ui module not found — --ui flag ignored.")
+            print("(scanner_ui.py was removed during cleanup; HTML UI is now served by server.py)")
 
     # Clean up test symlinks
     cleanup_test_files()

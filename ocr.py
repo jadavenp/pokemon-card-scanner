@@ -86,12 +86,12 @@ def extract_name(ocr_results):
 
     # OCR_DEBUG: log all candidates with position
     _max_y_dbg = max(max(pt[1] for pt in bbox) for (bbox, text, conf) in ocr_results) if ocr_results else 1
-    print("    [OCR DEBUG] All detected text:")
+    logger.debug("All detected text:")
     for (bbox, text, conf) in ocr_results:
         ys = [pt[1] for pt in bbox]
         y_pct = round(((min(ys) + max(ys)) / 2) / _max_y_dbg * 100)
-        print(f"      y={y_pct:3d}%  conf={conf:.2f}  text='{text}'")
-    print("    [OCR DEBUG] ---")
+        logger.debug("  y=%3d%%  conf=%.2f  text='%s'", y_pct, conf, text)
+    logger.debug("---")
 
     for (bbox, text, conf) in ocr_results:
         text_clean = text.strip()

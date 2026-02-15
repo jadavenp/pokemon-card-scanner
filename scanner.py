@@ -29,16 +29,12 @@ from card_detect import detect_and_crop_card
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
-try:
-    from prettytable import PrettyTable
-except ImportError:
-    print("Missing dependency: pip install prettytable")
-    sys.exit(1)
+# prettytable is lazy-imported in print_summary_table() so that
+# server.py can import process_image() without this dependency.
 
 from config import IMAGE_DIR, SET_NAMES, VARIANT_DISPLAY, CONFIDENCE_NAME_WEIGHT, CONFIDENCE_NUMBER_WEIGHT, CONFIDENCE_HASH_WEIGHT, CONFIDENCE_STAMP_WEIGHT, KNOWN_SET_TOTALS
 from database import load_database, lookup_card, lookup_by_name, get_set_id
 from ocr import detect_card_type, extract_name, extract_number
-from pricing_justtcg import fetch_live_pricing
 from stamp import load_stamp_template, check_stamp
 
 # Image matching is optional — gracefully degrade if not available
@@ -125,11 +121,11 @@ def process_image(img_path, reader, index, stamp_template, hash_db=None,
     """
     Process one card image. Returns a dict with all extracted fields.
 
-    Identification strategy:
-      1. OCR extracts name + number → database lookup
-      2. If hash_db is loaded, image hash provides confirmation or fallback
-      3. If OCR fails but hash matches confidently → use hash result
-      4. If both succeed but disagree → flag in id_method
+    Identification strategy (hash-first for speed):
+      1. Image hash matching (~50ms) — if confident match, skip OCR
+      2. OCR fallback (~1-2s) — extracts name + number if hash fails
+      3. Database lookup via OCR results (name+number, name-only)
+      4. Stamp detection always runs (determines 1st Edition pricing)
     """
     img_path = Path(img_path)
     img = cv2.imread(str(img_path))
@@ -158,39 +154,12 @@ def process_image(img_path, reader, index, stamp_template, hash_db=None,
         "error": None,
     }
 
-    # ── OCR Pipeline ──
-    ocr_results = reader.readtext(img)
-    result["card_type"] = detect_card_type(ocr_results)
-    name, name_conf = extract_name(ocr_results)
-    result["name"] = name
-    result["name_conf"] = name_conf
-
-    num, total, num_conf = extract_number(img, reader, card_type=result['card_type'])
-    result["number"] = num
-    result["total"] = total
-    result["num_conf"] = num_conf
-
-    # Fallback: search Pass 1 results for number pattern
-    if not num:
-        number_pattern = re.compile(r'(\d{1,3})\s*/\s*(\d{1,3})')
-        for (bbox, text, conf) in ocr_results:
-            match = number_pattern.search(text)
-            if match:
-                result["number"] = match.group(1)
-                result["total"] = match.group(2)
-                result["num_conf"] = round(conf * 100, 1)
-                break
-
-    # ── Stamp Detection ──
-    # Must run before pricing (determines 1st Edition flag).
-    # Skip on reference PNGs — they have no physical stamp.
-    if stamp_template is not None:
-        is_1st, stamp_conf_raw = check_stamp(img, result["card_type"], stamp_template)
-        result["stamp_1st"] = is_1st
-        result["stamp_conf"] = stamp_conf_raw
-
-    # ── Image Hash Matching ──
+    # ── Image Hash Matching (FAST PATH — ~50ms) ──
+    # Run before OCR. If hash matches confidently, skip the expensive
+    # OCR pipeline (~1-2s) and pull card identity from the database.
     hash_result = None
+    hash_identified = False
+
     if hash_db is not None:
         hash_result = match_card_image(img, hash_db)
         if hash_result["match"]:
@@ -205,72 +174,127 @@ def process_image(img_path, reader, index, stamp_template, hash_db=None,
                       f"w={top['distances']['whash']})"
                       f"{' CONFIDENT' if top['confident'] else ''}")
 
-    # ── Database Lookup + Identification (confidence-based) ──
-    ocr_matched = False
-    id_confidence = 0.0
+            # Confident hash match → skip OCR, use DB for card identity
+            if hash_result["confident"]:
+                card_data = index.get("by_id", {}).get(hash_result["card_id"])
+                if card_data:
+                    result["card_id"] = hash_result["card_id"]
+                    result["name"] = hash_result["name"]
+                    set_id = hash_result["card_id"].rsplit("-", 1)[0] if "-" in hash_result["card_id"] else ""
+                    result["set_name"] = SET_NAMES.get(set_id, set_id)
+                    result["rarity"] = card_data.get("rarity", "?")
+                    result["number"] = card_data.get("number", "")
+                    # Pull set total from card data (pokemontcg.io stores this in set.printedTotal)
+                    card_set = card_data.get("set", {})
+                    result["total"] = str(card_set.get("printedTotal", "")) if isinstance(card_set, dict) else None
+                    result["name_conf"] = 100.0  # DB-sourced, not OCR
+                    result["id_method"] = "hash"
+                    hash_identified = True
 
-    # Strategy 1: Name + Number → strongest match
-    if result["name"] and result["number"]:
-        matches = lookup_card(index, result["name"], result["number"])
-        if matches:
-            card = matches[0]
-            card_id = card.get("id", "")
-            set_id = get_set_id(card)
-            result["card_id"] = card_id
+    # ── OCR Pipeline (SLOW PATH — ~1-2s) ──
+    # Only runs if hash didn't confidently identify the card.
+    ocr_results = None
+    if not hash_identified:
+        ocr_results = reader.readtext(img)
+        result["card_type"] = detect_card_type(ocr_results)
+        name, name_conf = extract_name(ocr_results)
+        result["name"] = name
+        result["name_conf"] = name_conf
+
+        num, total, num_conf = extract_number(img, reader, card_type=result['card_type'])
+        result["number"] = num
+        result["total"] = total
+        result["num_conf"] = num_conf
+
+        # Fallback: search Pass 1 results for number pattern
+        if not num:
+            number_pattern = re.compile(r'(\d{1,3})\s*/\s*(\d{1,3})')
+            for (bbox, text, conf) in ocr_results:
+                match = number_pattern.search(text)
+                if match:
+                    result["number"] = match.group(1)
+                    result["total"] = match.group(2)
+                    result["num_conf"] = round(conf * 100, 1)
+                    break
+
+    # ── Stamp Detection ──
+    # Must run before pricing (determines 1st Edition flag).
+    # Runs on all physical scans regardless of identification method.
+    if stamp_template is not None:
+        is_1st, stamp_conf_raw = check_stamp(img, result.get("card_type") or "pokemon", stamp_template)
+        result["stamp_1st"] = is_1st
+        result["stamp_conf"] = stamp_conf_raw
+
+    # ── Database Lookup + Identification ──
+    # If hash already identified the card, skip to pricing.
+    # Otherwise, use OCR results to find the card in the database.
+    ocr_matched = hash_identified
+
+    if not ocr_matched:
+        # Strategy 1: Name + Number → strongest match
+        if result["name"] and result["number"]:
+            matches = lookup_card(index, result["name"], result["number"])
+            if matches:
+                card = matches[0]
+                card_id = card.get("id", "")
+                set_id = get_set_id(card)
+                result["card_id"] = card_id
+                result["set_name"] = SET_NAMES.get(set_id, set_id)
+                result["rarity"] = card.get("rarity", "?")
+                ocr_matched = True
+
+                if hash_result and hash_result["match"]:
+                    if hash_result["card_id"] == card_id:
+                        result["id_method"] = "ocr+hash"
+                    else:
+                        result["id_method"] = "ocr (hash disagree)"
+                else:
+                    result["id_method"] = "ocr"
+
+        # Strategy 2: Hash fallback if OCR name+number failed
+        if not ocr_matched and hash_result and hash_result["match"] and hash_result["confident"]:
+            result["card_id"] = hash_result["card_id"]
+            result["name"] = hash_result["name"]
+            set_id = hash_result["card_id"].rsplit("-", 1)[0] if "-" in hash_result["card_id"] else ""
             result["set_name"] = SET_NAMES.get(set_id, set_id)
-            result["rarity"] = card.get("rarity", "?")
+            result["id_method"] = "hash"
+            card_data = index.get("by_id", {}).get(hash_result["card_id"])
+            if card_data:
+                result["rarity"] = card_data.get("rarity", "?")
+                result["number"] = card_data.get("number", "")
+                card_set = card_data.get("set", {})
+                result["total"] = str(card_set.get("printedTotal", "")) if isinstance(card_set, dict) else None
             ocr_matched = True
 
-            if hash_result and hash_result["match"]:
-                if hash_result["card_id"] == card_id:
-                    result["id_method"] = "ocr+hash"
+        # Strategy 3: Name-only fallback (number OCR failed but name is good)
+        if not ocr_matched and result["name"] and result["name_conf"] > 30:
+            # Use set total hint from number extraction if available
+            set_hints = validate_number_against_sets(result["number"], result["total"])
+            set_hint = set_hints[0] if len(set_hints) == 1 else None
+
+            name_matches = lookup_by_name(index, result["name"], set_hint=set_hint)
+            if name_matches:
+                if len(name_matches) == 1:
+                    # Unambiguous: only one card with this name
+                    card = name_matches[0]
+                    result["card_id"] = card.get("id", "")
+                    set_id = get_set_id(card)
+                    result["set_name"] = SET_NAMES.get(set_id, set_id)
+                    result["rarity"] = card.get("rarity", "?")
+                    result["number"] = card.get("number", result["number"])
+                    result["id_method"] = "name_only"
+                    ocr_matched = True
                 else:
-                    result["id_method"] = "ocr (hash disagree)"
-            else:
-                result["id_method"] = "ocr"
-
-    # Strategy 2: Hash fallback if OCR name+number failed
-    if not ocr_matched and hash_result and hash_result["match"] and hash_result["confident"]:
-        result["card_id"] = hash_result["card_id"]
-        result["name"] = hash_result["name"]
-        set_id = hash_result["card_id"].rsplit("-", 1)[0] if "-" in hash_result["card_id"] else ""
-        result["set_name"] = SET_NAMES.get(set_id, set_id)
-        result["id_method"] = "hash"
-        card_data = index.get("by_id", {}).get(hash_result["card_id"])
-        if card_data:
-            result["rarity"] = card_data.get("rarity", "?")
-            result["number"] = card_data.get("number", "")
-        ocr_matched = True
-
-    # Strategy 3: Name-only fallback (number OCR failed but name is good)
-    if not ocr_matched and result["name"] and result["name_conf"] > 30:
-        # Use set total hint from number extraction if available
-        set_hints = validate_number_against_sets(result["number"], result["total"])
-        set_hint = set_hints[0] if len(set_hints) == 1 else None
-
-        name_matches = lookup_by_name(index, result["name"], set_hint=set_hint)
-        if name_matches:
-            if len(name_matches) == 1:
-                # Unambiguous: only one card with this name
-                card = name_matches[0]
-                result["card_id"] = card.get("id", "")
-                set_id = get_set_id(card)
-                result["set_name"] = SET_NAMES.get(set_id, set_id)
-                result["rarity"] = card.get("rarity", "?")
-                result["number"] = card.get("number", result["number"])
-                result["id_method"] = "name_only"
-                ocr_matched = True
-            else:
-                # Ambiguous: multiple cards share this name — pick best candidate
-                # Prefer vintage sets, or use hash hint if available
-                card = name_matches[0]  # Already sorted vintage-first
-                result["card_id"] = card.get("id", "")
-                set_id = get_set_id(card)
-                result["set_name"] = SET_NAMES.get(set_id, set_id)
-                result["rarity"] = card.get("rarity", "?")
-                result["number"] = card.get("number", result["number"])
-                result["id_method"] = f"name_only ({len(name_matches)} candidates)"
-                ocr_matched = True
+                    # Ambiguous: multiple cards share this name — pick best candidate
+                    # Prefer vintage sets, or use hash hint if available
+                    card = name_matches[0]  # Already sorted vintage-first
+                    result["card_id"] = card.get("id", "")
+                    set_id = get_set_id(card)
+                    result["set_name"] = SET_NAMES.get(set_id, set_id)
+                    result["rarity"] = card.get("rarity", "?")
+                    result["number"] = card.get("number", result["number"])
+                    result["id_method"] = f"name_only ({len(name_matches)} candidates)"
+                    ocr_matched = True
 
     # ── Compute identification confidence ──
     id_confidence = compute_identification_confidence(result)
@@ -313,6 +337,12 @@ def find_card_images():
 
 def print_summary_table(results):
     """Print the batch results summary table."""
+    try:
+        from prettytable import PrettyTable
+    except ImportError:
+        print("Missing dependency: pip install prettytable")
+        return "prettytable not installed", {"identified": 0, "first_eds": 0, "total_price": 0, "api_calls": 0, "hash_confirmed": 0, "hash_only": 0}
+
     table = PrettyTable()
     table.field_names = [
         "File", "Card (Set)", "Num", "Ed",

@@ -35,7 +35,6 @@ import time
 import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
-from card_detect import detect_and_crop_card
 from typing import Optional
 
 from fastapi import FastAPI, Request, UploadFile, File
@@ -44,7 +43,6 @@ from fastapi.responses import (
     JSONResponse,
     StreamingResponse,
 )
-from fastapi.staticfiles import StaticFiles
 import uvicorn
 
 # ─────────────────────────────────────────────────────────────
@@ -174,6 +172,10 @@ async def lifespan(app: FastAPI):
         logger.warning("Camera failed to start — dashboard will show placeholder")
 
     logger.info("Server ready")
+
+    # Pre-create temp directory for phone uploads (avoids race on first upload)
+    import tempfile
+    Path(tempfile.gettempdir(), "card-scanner-captures").mkdir(parents=True, exist_ok=True)
 
     yield  # ── Server is running ──
 
@@ -477,21 +479,9 @@ async def scan_uploaded_image(
     use_cache_param = request.query_params.get("use_cache", "true") if request else "true"
     use_cache = use_cache_param.lower() != "false"
 
-    # ── Detect and crop card from phone image ──
-    try:
-        import cv2 as _cv2
-        raw_img = _cv2.imread(img_path)
-        if raw_img is not None:
-            cropped_img, detected = detect_and_crop_card(raw_img)
-            if detected:
-                _cv2.imwrite(img_path, cropped_img)
-                logger.info("Card detected and cropped from phone image")
-            else:
-                logger.info("No card detected — using original phone image")
-    except Exception as e:
-        logger.warning("Card detection failed: %s — using original image", e)
-
     # ── Run scanner pipeline ──
+    # Card detection + perspective correction is handled inside process_image().
+    # No need to pre-process here — just pass the raw upload through.
     loop = asyncio.get_event_loop()
     try:
         result = await loop.run_in_executor(

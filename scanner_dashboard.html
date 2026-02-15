@@ -1,0 +1,1367 @@
+<!--
+  ╔══════════════════════════════════════════════════════════════════╗
+  ║  Card Scanner — Live Dashboard                                  ║
+  ║  All C's Coins, Comics & Collectibles                           ║
+  ║                                                                  ║
+  ║  Purpose:                                                        ║
+  ║    Real-time card scanning interface. Designed to run on a       ║
+  ║    Jetson Orin Nano served via FastAPI, viewed from any browser  ║
+  ║    on the local network. Currently uses mock data for layout     ║
+  ║    development — will be wired to /video_feed and /scan          ║
+  ║    endpoints when the camera module is ready.                    ║
+  ║                                                                  ║
+  ║  Themes:                                                         ║
+  ║    1. Dark (default) — utilitarian card-grading-station look     ║
+  ║    2. Pokédex — red/cream retro device aesthetic                 ║
+  ║                                                                  ║
+  ║  Data contract (matches process_image() return dict):            ║
+  ║    { name, set_name, number, total, card_id, rarity,            ║
+  ║      stamp_1st, stamp_conf, price, price_variant, id_method,    ║
+  ║      hash_distance, name_conf, num_conf, time, file, error }    ║
+  ╚══════════════════════════════════════════════════════════════════╝
+-->
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Card Scanner — All C's Collectibles</title>
+
+<!-- ═══ FONTS ═══
+     JetBrains Mono: monospace data display (prices, stats, IDs)
+     Outfit: display headings and large numbers
+     Silkscreen: pixel font used only in Pokédex theme
+-->
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Outfit:wght@300;500;700;900&family=Silkscreen:wght@400;700&display=swap" rel="stylesheet">
+
+<style>
+  /* ═══════════════════════════════════════════════════════════════
+     THEME SYSTEM
+     All theme-dependent colors are CSS custom properties on :root.
+     Switching themes swaps the [data-theme] attribute on <html>,
+     which triggers a different set of variable values.
+     ═══════════════════════════════════════════════════════════════ */
+
+  /* ─── DARK THEME (default) ───
+     Industrial / card-grading-station aesthetic.
+     Dark backgrounds, gold accents, high contrast data.
+  */
+  [data-theme="dark"] {
+    --bg-primary: #0a0a0c;
+    --bg-secondary: #111116;
+    --bg-card: #18181f;
+    --bg-elevated: #1e1e27;
+    --border: #2a2a35;
+    --border-accent: #3a3a48;
+    --text-primary: #e8e8ec;
+    --text-secondary: #8888a0;
+    --text-muted: #555568;
+    --accent-primary: #d4a843;        /* Gold — brand accent */
+    --accent-primary-dim: #a07e2e;
+    --accent-green: #2dd4a0;
+    --accent-green-dim: rgba(45, 212, 160, 0.12);
+    --accent-red: #f05252;
+    --accent-red-dim: rgba(240, 82, 82, 0.12);
+    --accent-blue: #5b8def;
+    --accent-blue-dim: rgba(91, 141, 239, 0.12);
+    --font-display: 'Outfit', sans-serif;
+    --font-mono: 'JetBrains Mono', monospace;
+    --header-bg: var(--bg-secondary);
+    --camera-bg: #050507;
+    --scan-border-color: var(--accent-primary);
+    --logo-bg: linear-gradient(135deg, var(--accent-primary), var(--accent-primary-dim));
+    --logo-text: var(--bg-primary);
+    --badge-1st-bg: rgba(212, 168, 67, 0.15);
+    --badge-1st-color: var(--accent-primary);
+    --badge-1st-border: rgba(212, 168, 67, 0.25);
+  }
+
+  /* ─── POKÉDEX THEME ───
+     Inspired by the classic red Pokédex device.
+     Red shell, cream/tan data screens, pixel accents.
+  */
+  [data-theme="pokedex"] {
+    --bg-primary: #c0282e;            /* Pokédex red shell */
+    --bg-secondary: #a82228;
+    --bg-card: #f5eed6;               /* Cream screen background */
+    --bg-elevated: #ece4c8;
+    --border: #b8323a;
+    --border-accent: #d44a50;
+    --text-primary: #2a1f1f;
+    --text-secondary: #6b5c5c;
+    --text-muted: #998a8a;
+    --accent-primary: #1a73e8;        /* Blue indicator light */
+    --accent-primary-dim: #145db8;
+    --accent-green: #2e8b57;
+    --accent-green-dim: rgba(46, 139, 87, 0.12);
+    --accent-red: #c0282e;
+    --accent-red-dim: rgba(192, 40, 46, 0.12);
+    --accent-blue: #1a73e8;
+    --accent-blue-dim: rgba(26, 115, 232, 0.12);
+    --font-display: 'Silkscreen', 'Outfit', sans-serif;
+    --font-mono: 'JetBrains Mono', monospace;
+    --header-bg: #8b1a1f;
+    --camera-bg: #1a2a1a;
+    --scan-border-color: #ffcb05;     /* Pokémon yellow */
+    --logo-bg: linear-gradient(135deg, #1a73e8, #145db8);
+    --logo-text: #fff;
+    --badge-1st-bg: rgba(255, 203, 5, 0.2);
+    --badge-1st-color: #b8860b;
+    --badge-1st-border: rgba(255, 203, 5, 0.4);
+  }
+
+  /* Pokédex theme overrides for specific elements */
+  [data-theme="pokedex"] .header { border-bottom: 3px solid #ffcb05; }
+  [data-theme="pokedex"] .header-logo {
+    border-radius: 50%;
+    width: 40px; height: 40px;
+    box-shadow: inset 0 -2px 4px rgba(0,0,0,0.3), 0 0 8px rgba(26,115,232,0.5);
+  }
+  [data-theme="pokedex"] .stats-bar { border-radius: 0; }
+  [data-theme="pokedex"] .stat-cell { background: var(--bg-card); color: var(--text-primary); }
+  [data-theme="pokedex"] .stat-value { color: var(--text-primary); }
+  [data-theme="pokedex"] .stat-value.gold { color: var(--accent-primary); }
+  [data-theme="pokedex"] .stat-value.green { color: var(--accent-green); }
+  [data-theme="pokedex"] .stat-value.blue { color: var(--accent-blue); }
+  [data-theme="pokedex"] .scan-card { border-bottom-color: #d8d0b8; }
+  [data-theme="pokedex"] .scan-card:hover { background: var(--bg-elevated); }
+  [data-theme="pokedex"] .scan-name { color: var(--text-primary); }
+  [data-theme="pokedex"] .history-panel { background: var(--bg-card); }
+  [data-theme="pokedex"] .history-header { background: var(--bg-card); border-bottom-color: #d8d0b8; }
+  [data-theme="pokedex"] .session-footer { background: #8b1a1f; }
+  [data-theme="pokedex"] .session-total-value { color: #ffcb05; }
+  [data-theme="pokedex"] .session-total-label { color: rgba(255,255,255,0.6); }
+  [data-theme="pokedex"] .session-footer #sessionMeta { color: rgba(255,255,255,0.4); }
+  [data-theme="pokedex"] .camera-panel { border-right-color: #8b1a1f; }
+  [data-theme="pokedex"] .camera-toolbar { border-bottom-color: #8b1a1f; background: #a82228; }
+  [data-theme="pokedex"] .camera-toolbar-label { color: rgba(255,255,255,0.5); }
+  [data-theme="pokedex"] .camera-toolbar span { color: rgba(255,255,255,0.4); }
+  [data-theme="pokedex"] .camera-actions { border-top-color: #8b1a1f; background: #a82228; }
+  [data-theme="pokedex"] .btn {
+    background: var(--bg-card); color: var(--text-primary);
+    border-color: #d8d0b8;
+  }
+  [data-theme="pokedex"] .btn:hover { background: var(--bg-elevated); }
+  [data-theme="pokedex"] .btn-primary {
+    background: linear-gradient(135deg, #ffcb05, #c8a004);
+    color: #2a1f1f; border-color: #ffcb05;
+  }
+  [data-theme="pokedex"] .btn-danger { border-color: #8b1a1f; color: #8b1a1f; }
+  [data-theme="pokedex"] .scan-price-value { color: var(--accent-green); }
+  [data-theme="pokedex"] .scan-price-value.high-value { color: #b8860b; }
+  [data-theme="pokedex"] .scan-thumb { border-color: #d8d0b8; background: #ece4c8; }
+  [data-theme="pokedex"] .right-panel { background: var(--bg-primary); }
+
+  /* ═══════════════════════════════════════════════════════════════
+     BASE RESET & BODY
+     ═══════════════════════════════════════════════════════════════ */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: 13px;
+    line-height: 1.5;
+    overflow-x: hidden;
+    min-height: 100vh;
+  }
+
+  /* ═══════════════════════════════════════════════════════════════
+     HEADER — Top bar with branding, status indicators, theme toggle
+     ═══════════════════════════════════════════════════════════════ */
+  .header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 24px;
+    border-bottom: 1px solid var(--border);
+    background: var(--header-bg);
+  }
+  .header-brand {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+  /* Logo mark — "AC" monogram */
+  .header-logo {
+    width: 36px;
+    height: 36px;
+    background: var(--logo-bg);
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--font-display);
+    font-weight: 900;
+    font-size: 18px;
+    color: var(--logo-text);
+    flex-shrink: 0;
+  }
+  .header-title {
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: 18px;
+    letter-spacing: -0.3px;
+    color: var(--text-primary);
+  }
+  [data-theme="pokedex"] .header-title { color: #fff; }
+  .header-title span { color: var(--accent-primary); }
+  [data-theme="pokedex"] .header-title span { color: #ffcb05; }
+
+  /* Right side: status + theme toggle */
+  .header-controls {
+    display: flex;
+    align-items: center;
+    gap: 18px;
+  }
+  .header-status {
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    color: var(--text-secondary);
+    font-size: 12px;
+  }
+  [data-theme="pokedex"] .header-status { color: rgba(255,255,255,0.6); }
+  [data-theme="pokedex"] .header-status .separator { color: rgba(255,255,255,0.2); }
+
+  /* Camera connection indicator dot */
+  .status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+    margin-right: 6px;
+  }
+  .status-dot.live {
+    background: var(--accent-green);
+    box-shadow: 0 0 8px var(--accent-green);
+    animation: pulse 2s infinite;
+  }
+  .status-dot.offline { background: var(--text-muted); }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+
+  /* ─── Theme toggle button ─── */
+  .theme-toggle {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    padding: 6px 12px;
+    border: 1px solid var(--border-accent);
+    border-radius: 6px;
+    background: var(--bg-elevated);
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all 0.2s;
+    white-space: nowrap;
+  }
+  .theme-toggle:hover {
+    border-color: var(--accent-primary);
+    color: var(--text-primary);
+  }
+  [data-theme="pokedex"] .theme-toggle {
+    background: rgba(0,0,0,0.2);
+    border-color: rgba(255,255,255,0.2);
+    color: rgba(255,255,255,0.7);
+  }
+  [data-theme="pokedex"] .theme-toggle:hover {
+    border-color: #ffcb05;
+    color: #fff;
+  }
+
+  /* ═══════════════════════════════════════════════════════════════
+     MAIN LAYOUT — 2-column grid: camera (left) + data (right)
+     ═══════════════════════════════════════════════════════════════ */
+  .main {
+    display: grid;
+    grid-template-columns: 1fr 400px;
+    grid-template-rows: auto 1fr;
+    height: calc(100vh - 65px);       /* viewport minus header height */
+  }
+
+  /* ═══════════════════════════════════════════════════════════════
+     CAMERA PANEL — Left side: live feed + scan controls
+     On Jetson: shows MJPEG stream from /video_feed
+     In dev: shows placeholder or mock image
+     ═══════════════════════════════════════════════════════════════ */
+  .camera-panel {
+    grid-row: 1 / 3;                  /* spans both grid rows */
+    background: var(--bg-secondary);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+  }
+  /* Top info bar showing camera model + resolution */
+  .camera-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .camera-toolbar-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--text-muted);
+  }
+  /* Camera viewport — will contain <img> tag pointing to MJPEG stream */
+  .camera-feed {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    overflow: hidden;
+    background: var(--camera-bg);
+  }
+  .camera-feed img,
+  .camera-feed video {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+  }
+  /* Shown when no camera is connected */
+  .camera-placeholder {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+    color: var(--text-muted);
+  }
+  .camera-placeholder-icon {
+    width: 80px;
+    height: 80px;
+    border: 2px dashed var(--border-accent);
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 32px;
+  }
+  .camera-placeholder p { font-size: 12px; }
+  [data-theme="pokedex"] .camera-placeholder { color: rgba(255,255,255,0.4); }
+  [data-theme="pokedex"] .camera-placeholder-icon { border-color: rgba(255,255,255,0.2); }
+
+  /* Gold border overlay that flashes when a card is scanned */
+  .scan-overlay {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    display: none;
+  }
+  .scan-overlay.active {
+    display: block;
+    animation: scanFlash 1.2s ease-out forwards;
+  }
+  .scan-overlay::after {
+    content: '';
+    position: absolute;
+    inset: 12%;
+    border: 2px solid var(--scan-border-color);
+    border-radius: 8px;
+    box-shadow: 0 0 30px rgba(212, 168, 67, 0.2);
+  }
+  @keyframes scanFlash {
+    0% { opacity: 0; } 15% { opacity: 1; } 100% { opacity: 0; }
+  }
+
+  /* Bottom action buttons: Scan, New Session, Stop */
+  .camera-actions {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    padding: 14px 16px;
+    border-top: 1px solid var(--border);
+  }
+
+  /* ─── Shared button styles ─── */
+  .btn {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-weight: 600;
+    padding: 10px 24px;
+    border: 1px solid var(--border-accent);
+    border-radius: 6px;
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+    cursor: pointer;
+    transition: all 0.15s;
+    letter-spacing: 0.5px;
+  }
+  .btn:hover { border-color: var(--accent-primary-dim); background: var(--bg-card); }
+  .btn-primary {
+    background: linear-gradient(135deg, var(--accent-primary), var(--accent-primary-dim));
+    color: var(--logo-text);
+    border-color: var(--accent-primary);
+  }
+  .btn-primary:hover { filter: brightness(1.1); }
+  .btn-danger { border-color: var(--accent-red); color: var(--accent-red); }
+  .btn-danger:hover { background: var(--accent-red-dim); }
+
+  /* ═══════════════════════════════════════════════════════════════
+     RIGHT PANEL — Stats, scan history, running total
+     ═══════════════════════════════════════════════════════════════ */
+  .right-panel {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* ─── STATS BAR ─── Three key metrics at top of right panel */
+  .stats-bar {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1px;
+    background: var(--border);
+    border-bottom: 1px solid var(--border);
+  }
+  .stat-cell {
+    background: var(--bg-secondary);
+    padding: 14px 16px;
+    text-align: center;
+  }
+  .stat-value {
+    font-family: var(--font-display);
+    font-weight: 900;
+    font-size: 24px;
+    letter-spacing: -1px;
+  }
+  .stat-value.gold { color: var(--accent-primary); }
+  .stat-value.green { color: var(--accent-green); }
+  .stat-value.blue { color: var(--accent-blue); }
+  .stat-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--text-muted);
+    margin-top: 2px;
+  }
+
+  /* ═══════════════════════════════════════════════════════════════
+     SCAN HISTORY — Scrollable list of scanned cards
+     Each card shows: thumbnail, name/set, edition badge,
+     ID method badge, price, and condition variant.
+     ═══════════════════════════════════════════════════════════════ */
+  .history-panel {
+    flex: 1;
+    overflow-y: auto;
+    background: var(--bg-primary);
+  }
+  .history-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    background: var(--bg-primary);
+    z-index: 1;
+  }
+  .history-header-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--text-muted);
+  }
+  .history-list { padding: 0; }
+
+  /* ─── Individual scan card row ─── */
+  .scan-card {
+    display: grid;
+    grid-template-columns: 52px 1fr auto;
+    gap: 12px;
+    align-items: center;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    transition: background 0.15s;
+    cursor: default;
+  }
+  .scan-card:hover { background: var(--bg-secondary); }
+  /* Entry animation for newly scanned cards */
+  .scan-card.new-entry { animation: slideIn 0.3s ease-out; }
+  @keyframes slideIn {
+    0% { opacity: 0; transform: translateX(20px); }
+    100% { opacity: 1; transform: translateX(0); }
+  }
+
+  /* Card thumbnail (from ref image or captured frame) */
+  .scan-thumb {
+    width: 52px;
+    height: 72px;
+    background: var(--bg-card);
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .scan-thumb img { width: 100%; height: 100%; object-fit: cover; }
+  .scan-thumb-placeholder { font-size: 18px; color: var(--text-muted); }
+
+  /* Card info: name, set, number, badges */
+  .scan-info { min-width: 0; }         /* allows text-overflow to work */
+  .scan-name {
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: 14px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--text-primary);
+  }
+  [data-theme="dark"] .scan-name { color: #fff; }
+  .scan-meta {
+    font-size: 11px;
+    color: var(--text-secondary);
+    margin-top: 2px;
+  }
+  .scan-meta-row {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    margin-top: 3px;
+    flex-wrap: wrap;
+  }
+
+  /* ─── Badges ─── Edition, ID method indicators */
+  .badge {
+    display: inline-block;
+    font-size: 10px;
+    font-weight: 600;
+    padding: 1px 6px;
+    border-radius: 3px;
+    letter-spacing: 0.5px;
+  }
+  /* 1st Edition badge */
+  .badge-1st {
+    background: var(--badge-1st-bg);
+    color: var(--badge-1st-color);
+    border: 1px solid var(--badge-1st-border);
+  }
+  /* Unlimited badge (subtle) */
+  .badge-unl {
+    color: var(--text-muted);
+    border: 1px solid var(--border);
+  }
+  /* Hash-identified badge (blue) */
+  .badge-hash {
+    background: var(--accent-blue-dim);
+    color: var(--accent-blue);
+    border: 1px solid rgba(91, 141, 239, 0.2);
+  }
+  /* OCR-identified badge (green) */
+  .badge-ocr {
+    background: var(--accent-green-dim);
+    color: var(--accent-green);
+    border: 1px solid rgba(45, 212, 160, 0.2);
+  }
+  /* Combined OCR+Hash badge */
+  .badge-ocr-hash {
+    background: rgba(139, 92, 246, 0.12);
+    color: #a78bfa;
+    border: 1px solid rgba(139, 92, 246, 0.2);
+  }
+
+  /* ─── Price column ─── */
+  .scan-price { text-align: right; white-space: nowrap; }
+  .scan-price-value {
+    font-family: var(--font-display);
+    font-weight: 900;
+    font-size: 18px;
+    color: var(--accent-green);
+  }
+  /* Cards worth $50+ get gold highlight */
+  .scan-price-value.high-value { color: var(--accent-primary); }
+  .scan-price-condition {
+    font-size: 10px;
+    color: var(--text-muted);
+    margin-top: 1px;
+  }
+
+  /* ═══════════════════════════════════════════════════════════════
+     SESSION FOOTER — Persistent bottom bar with running total
+     ═══════════════════════════════════════════════════════════════ */
+  .session-footer {
+    padding: 12px 16px;
+    border-top: 1px solid var(--border);
+    background: var(--bg-secondary);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .session-total-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--text-muted);
+  }
+  .session-total-value {
+    font-family: var(--font-display);
+    font-weight: 900;
+    font-size: 28px;
+    color: var(--accent-primary);
+    letter-spacing: -1px;
+  }
+
+  /* ═══════════════════════════════════════════════════════════════
+     SCROLLBAR — Custom thin scrollbar for history panel
+     ═══════════════════════════════════════════════════════════════ */
+  .history-panel::-webkit-scrollbar { width: 6px; }
+  .history-panel::-webkit-scrollbar-track { background: transparent; }
+  .history-panel::-webkit-scrollbar-thumb { background: var(--border-accent); border-radius: 3px; }
+  .history-panel::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+  /* ═══════════════════════════════════════════════════════════════
+     PRICING MODE TOGGLE — Batch (cached) vs Single (live) switch
+     Positioned in the camera actions bar.
+     ═══════════════════════════════════════════════════════════════ */
+  .pricing-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    border: 1px solid var(--border-accent);
+    border-radius: 6px;
+    background: var(--bg-card);
+    font-size: 11px;
+    color: var(--text-secondary);
+    user-select: none;
+  }
+  .pricing-toggle-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--text-muted);
+    white-space: nowrap;
+  }
+  /* The actual toggle switch track */
+  .toggle-switch {
+    position: relative;
+    width: 40px;
+    height: 20px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-accent);
+    border-radius: 10px;
+    cursor: pointer;
+    transition: all 0.2s;
+    flex-shrink: 0;
+  }
+  .toggle-switch::after {
+    content: '';
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 14px;
+    height: 14px;
+    background: var(--text-muted);
+    border-radius: 50%;
+    transition: all 0.2s;
+  }
+  /* Active state = SINGLE mode (live pricing) */
+  .toggle-switch.active {
+    background: var(--accent-green-dim);
+    border-color: var(--accent-green);
+  }
+  .toggle-switch.active::after {
+    left: 22px;
+    background: var(--accent-green);
+  }
+  [data-theme="pokedex"] .pricing-toggle {
+    background: rgba(0,0,0,0.15);
+    border-color: rgba(255,255,255,0.15);
+  }
+  [data-theme="pokedex"] .pricing-toggle-label { color: rgba(255,255,255,0.4); }
+  .pricing-mode-name {
+    font-weight: 600;
+    font-size: 11px;
+    min-width: 48px;
+    color: var(--text-primary);
+  }
+  [data-theme="pokedex"] .pricing-mode-name { color: var(--text-primary); }
+
+  /* Cache stats badge — sits in header next to API status */
+  .cache-stats {
+    font-size: 11px;
+    color: var(--text-muted);
+    white-space: nowrap;
+  }
+  .cache-stats .cache-hit-rate {
+    color: var(--accent-green);
+    font-weight: 600;
+  }
+  [data-theme="pokedex"] .cache-stats { color: rgba(255,255,255,0.4); }
+  [data-theme="pokedex"] .cache-stats .cache-hit-rate { color: var(--accent-green); }
+
+  /* ─── Empty state (shown when no cards scanned yet) ─── */
+  .empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 48px 24px;
+    color: var(--text-muted);
+    text-align: center;
+    gap: 8px;
+  }
+  .empty-state-icon { font-size: 32px; margin-bottom: 8px; }
+  .empty-state p { font-size: 12px; }
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     HEADER — Branding, connection status, theme toggle
+     ═══════════════════════════════════════════════════════════════ -->
+<header class="header">
+  <div class="header-brand">
+    <div class="header-logo">AC</div>
+    <div class="header-title">Card Scanner <span>— All C's Collectibles</span></div>
+  </div>
+  <div class="header-controls">
+    <div class="header-status">
+      <span>
+        <span class="status-dot live" id="statusDot"></span>
+        <span id="statusText">Camera Live</span>
+      </span>
+      <span class="separator" style="color: var(--text-muted)">|</span>
+      <!-- API quota display — updated from /api/status endpoint later -->
+      <span id="apiStatus" style="color: var(--text-secondary)">API: —/100 daily</span>
+      <span class="separator" style="color: var(--text-muted)">|</span>
+      <!-- Cache hit stats — updated by JS on each scan -->
+      <span class="cache-stats" id="cacheStats">Cache: 0 hits</span>
+    </div>
+    <!-- Theme switch button -->
+    <button class="theme-toggle" id="themeToggle" onclick="toggleTheme()">
+      🎨 Pokédex Theme
+    </button>
+  </div>
+</header>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     MAIN LAYOUT — Two-column: camera (left) + data panel (right)
+     ═══════════════════════════════════════════════════════════════ -->
+<div class="main">
+
+  <!-- ─── CAMERA PANEL (left) ─── -->
+  <div class="camera-panel">
+    <!-- Camera info bar -->
+    <div class="camera-toolbar">
+      <span class="camera-toolbar-label">Live Feed — Arducam IMX708</span>
+      <span style="color: var(--text-muted); font-size: 11px;" id="cameraRes">1920×1080 @ 30fps</span>
+    </div>
+
+    <!-- Camera viewport
+         Shows MJPEG stream from /video_feed when server is running.
+         Falls back to placeholder if connection fails. -->
+    <div class="camera-feed" id="cameraFeed">
+      <img src="/video_feed" id="cameraStream" style="display:none"
+           onload="onCameraConnected()" onerror="onCameraDisconnected()">
+      <div class="camera-placeholder" id="cameraPlaceholder">
+        <div class="camera-placeholder-icon">📷</div>
+        <p>Connecting to camera...</p>
+        <p style="font-size: 11px;">Waiting for /video_feed</p>
+      </div>
+      <!-- Scan flash overlay — briefly shows gold border when card is scanned -->
+      <div class="scan-overlay" id="scanOverlay"></div>
+    </div>
+
+    <!-- Action buttons + pricing mode toggle -->
+    <div class="camera-actions">
+      <button class="btn btn-primary" id="btnScan" onclick="scanCard()">
+        ⏎ SCAN CARD
+      </button>
+      <!-- Pricing mode toggle: Batch (cached, 20/req) vs Single (fresh, 1/req) -->
+      <div class="pricing-toggle" title="Batch: uses cached prices (20 cards/request)&#10;Single: fetches fresh price per card">
+        <span class="pricing-toggle-label">Pricing</span>
+        <div class="toggle-switch" id="pricingToggle" onclick="togglePricingMode()"></div>
+        <span class="pricing-mode-name" id="pricingModeLabel">Batch</span>
+      </div>
+      <button class="btn" onclick="clearSession()">↺ NEW SESSION</button>
+      <button class="btn btn-danger" id="btnStop">■ STOP</button>
+    </div>
+  </div>
+
+  <!-- ─── RIGHT PANEL ─── -->
+  <div class="right-panel">
+
+    <!-- Session stats summary — 3 key metrics -->
+    <div class="stats-bar">
+      <div class="stat-cell">
+        <div class="stat-value gold" id="statTotal">$0.00</div>
+        <div class="stat-label">Session Value</div>
+      </div>
+      <div class="stat-cell">
+        <div class="stat-value green" id="statCards">0</div>
+        <div class="stat-label">Cards Scanned</div>
+      </div>
+      <div class="stat-cell">
+        <div class="stat-value blue" id="statAvg">$0.00</div>
+        <div class="stat-label">Avg Value</div>
+      </div>
+    </div>
+
+    <!-- Scrollable scan history -->
+    <div class="history-panel">
+      <div class="history-header">
+        <span class="history-header-label">Scan History</span>
+        <span style="color: var(--text-muted); font-size: 11px;" id="historyCount">0 cards</span>
+      </div>
+      <div class="history-list" id="historyList">
+        <!-- Empty state — hidden once first card is scanned -->
+        <div class="empty-state" id="emptyState">
+          <div class="empty-state-icon">🃏</div>
+          <p>No cards scanned yet</p>
+          <p>Place a card under the camera and press SCAN</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Persistent running total footer -->
+    <div class="session-footer">
+      <div>
+        <div class="session-total-label">Running Total</div>
+        <div style="font-size: 10px; color: var(--text-muted); margin-top: 2px;" id="sessionMeta">
+          0 cards · 0 first ed
+        </div>
+      </div>
+      <div class="session-total-value" id="runningTotal">$0.00</div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     JAVASCRIPT — Session state, mock data, UI updates
+     ═══════════════════════════════════════════════════════════════ -->
+<script>
+  // ─────────────────────────────────────────────────────────────
+  // SESSION STATE
+  // Tracks all scanned cards for the current session.
+  // In production, this persists until "New Session" is clicked.
+  // ─────────────────────────────────────────────────────────────
+  let session = {
+    cards: [],        // Array of scan result objects
+    totalValue: 0,    // Running dollar total
+    firstEdCount: 0,  // Count of 1st Edition cards
+  };
+
+  // ─────────────────────────────────────────────────────────────
+  // PRICING MODE STATE
+  // Two modes control how pricing is fetched:
+  //   "batch"  — Use cached prices. Server batches up to 20 cards
+  //              per API call. Results cached with 4hr TTL. Best
+  //              for scanning sessions (stack of cards).
+  //   "single" — Bypass cache, fetch fresh price per card. Best
+  //              for spot-checking a single card's current value.
+  //
+  // In production, this flag is sent with the /scan request so
+  // the server knows whether to use pricing_cache.py or not.
+  // ─────────────────────────────────────────────────────────────
+  let pricingMode = 'batch';   // 'batch' or 'single'
+
+  // Mock cache stats (in production, returned from /scan response)
+  let cacheState = {
+    hits: 0,
+    misses: 0,
+    size: 0,
+  };
+
+  // ─────────────────────────────────────────────────────────────
+  // MOCK SCAN DATA (kept as fallback if server is unreachable)
+  // Matches the exact dict structure returned by process_image().
+  // ─────────────────────────────────────────────────────────────
+  const mockCards = [
+    {
+      name: "Charizard", set_name: "Base Set", number: "4", total: "102",
+      card_id: "base1-4", rarity: "Rare Holo", stamp_1st: true,
+      stamp_conf: 87.3, price: "$438.75", price_variant: "1st_ed_nm",
+      id_method: "ocr+hash", hash_distance: 4, name_conf: 94, num_conf: 98,
+      time: 2.8
+    },
+    {
+      name: "Pikachu", set_name: "Base Set", number: "58", total: "102",
+      card_id: "base1-58", rarity: "Common", stamp_1st: false,
+      stamp_conf: 0, price: "$12.50", price_variant: "unlimited_nm",
+      id_method: "hash", hash_distance: 2, name_conf: 0, num_conf: 0,
+      time: 1.4
+    },
+  ];
+  let mockIndex = 0;
+
+  // Track whether the server is reachable
+  let serverConnected = false;
+
+  // ─────────────────────────────────────────────────────────────
+  // CAMERA CONNECTION HANDLERS
+  // Called by the <img> onload/onerror on the MJPEG stream.
+  // ─────────────────────────────────────────────────────────────
+
+  /**
+   * Called when the MJPEG stream <img> successfully loads.
+   * Hides the placeholder and shows the live feed.
+   */
+  function onCameraConnected() {
+    document.getElementById('cameraStream').style.display = 'block';
+    document.getElementById('cameraPlaceholder').style.display = 'none';
+    document.getElementById('statusDot').className = 'status-dot live';
+    document.getElementById('statusText').textContent = 'Camera Live';
+    serverConnected = true;
+  }
+
+  /**
+   * Called when the MJPEG stream <img> fails to load.
+   * Shows the placeholder and sets status to offline.
+   * Retries connection after 3 seconds.
+   */
+  function onCameraDisconnected() {
+    document.getElementById('cameraStream').style.display = 'none';
+    document.getElementById('cameraPlaceholder').style.display = 'flex';
+    document.getElementById('statusDot').className = 'status-dot offline';
+    document.getElementById('statusText').textContent = 'Camera Offline';
+    serverConnected = false;
+
+    // Retry connection after 3 seconds
+    setTimeout(() => {
+      const img = document.getElementById('cameraStream');
+      img.src = '/video_feed?' + Date.now();  // cache-bust
+    }, 3000);
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // SCAN CARD — POST to /scan endpoint
+  // Falls back to mock data if server is unreachable.
+  // ─────────────────────────────────────────────────────────────
+
+  /**
+   * Trigger a card scan via the server's /scan endpoint.
+   * Sends the current pricing mode (batch/single) and receives
+   * a real scan result from the pipeline.
+   */
+  async function scanCard() {
+    const btn = document.getElementById('btnScan');
+    btn.disabled = true;
+    btn.style.opacity = '0.5';
+    btn.textContent = '⏳ SCANNING...';
+
+    // Flash the scan overlay on the camera feed
+    const overlay = document.getElementById('scanOverlay');
+    overlay.classList.remove('active');
+    void overlay.offsetWidth;
+    overlay.classList.add('active');
+
+    try {
+      const response = await fetch('/scan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ use_cache: pricingMode === 'batch' }),
+      });
+
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        throw new Error(err.error || `Server returned ${response.status}`);
+      }
+
+      const data = await response.json();
+      const card = data.result;
+
+      // Tag with cache info from server response
+      card._cached = card._cached || false;
+
+      // Update cache stats from server
+      if (data.cache) {
+        cacheState.hits = data.cache.hits || 0;
+        cacheState.misses = data.cache.misses || 0;
+        cacheState.size = data.cache.size || 0;
+      }
+
+      addCardToSession(card);
+      updateCacheStats();
+
+      // Update camera info if returned
+      if (data.camera && data.camera.mock_current) {
+        document.getElementById('cameraRes').textContent =
+          `Mock: ${data.camera.mock_current}`;
+      }
+
+    } catch (err) {
+      console.error('Scan failed:', err.message);
+
+      // ── Fallback to mock data ──
+      const card = { ...mockCards[mockIndex % mockCards.length] };
+      mockIndex++;
+      card._cached = false;
+      card.error = 'mock_fallback';
+      addCardToSession(card);
+
+      // Brief visual indicator that this was a fallback
+      document.getElementById('statusText').textContent = 'Scan Error — Using Mock';
+      setTimeout(() => {
+        document.getElementById('statusText').textContent =
+          serverConnected ? 'Camera Live' : 'Camera Offline';
+      }, 3000);
+    }
+
+    btn.disabled = false;
+    btn.style.opacity = '1';
+    btn.textContent = '⏎ SCAN CARD';
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // PRICING MODE TOGGLE
+  // Switches between batch (cached) and single (live) pricing.
+  // ─────────────────────────────────────────────────────────────
+
+  /**
+   * Toggle pricing mode between 'batch' and 'single'.
+   * Updates the toggle switch UI and mode label.
+   */
+  function togglePricingMode() {
+    pricingMode = pricingMode === 'batch' ? 'single' : 'batch';
+
+    const toggle = document.getElementById('pricingToggle');
+    const label = document.getElementById('pricingModeLabel');
+
+    if (pricingMode === 'single') {
+      toggle.classList.add('active');
+      label.textContent = 'Single';
+    } else {
+      toggle.classList.remove('active');
+      label.textContent = 'Batch';
+    }
+  }
+
+  /**
+   * Update the cache stats display in the header.
+   * Stats now come from the /scan response (server-side cache).
+   */
+  function updateCacheStats() {
+    const el = document.getElementById('cacheStats');
+    const total = cacheState.hits + cacheState.misses;
+    if (total === 0) {
+      el.textContent = 'Cache: 0 hits';
+      return;
+    }
+    const rate = Math.round((cacheState.hits / total) * 100);
+    el.innerHTML = `Cache: <span class="cache-hit-rate">${rate}%</span> · ${cacheState.size} stored`;
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // THEME MANAGEMENT
+  // Persists theme choice to localStorage so it survives refresh.
+  // ─────────────────────────────────────────────────────────────
+
+  /**
+   * Toggle between 'dark' and 'pokedex' themes.
+   */
+  function toggleTheme() {
+    const html = document.documentElement;
+    const current = html.getAttribute('data-theme');
+    const next = current === 'dark' ? 'pokedex' : 'dark';
+    html.setAttribute('data-theme', next);
+
+    document.getElementById('themeToggle').textContent =
+      next === 'dark' ? '🎨 Pokédex Theme' : '🌙 Dark Theme';
+
+    try { localStorage.setItem('scanner-theme', next); } catch(e) {}
+  }
+
+  /**
+   * Restore saved theme on page load.
+   */
+  function loadSavedTheme() {
+    try {
+      const saved = localStorage.getItem('scanner-theme');
+      if (saved === 'pokedex') {
+        document.documentElement.setAttribute('data-theme', 'pokedex');
+        document.getElementById('themeToggle').textContent = '🌙 Dark Theme';
+      }
+    } catch(e) {}
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // SERVER STATUS POLLING
+  // Fetches /api/status periodically to update header indicators.
+  // ─────────────────────────────────────────────────────────────
+
+  /**
+   * Poll server status and update the API quota + cache displays.
+   * Runs every 30 seconds.
+   */
+  async function pollStatus() {
+    try {
+      const resp = await fetch('/api/status');
+      if (!resp.ok) return;
+      const data = await resp.json();
+
+      // Update cache stats from server
+      if (data.cache) {
+        cacheState.hits = data.cache.hits || 0;
+        cacheState.misses = data.cache.misses || 0;
+        cacheState.size = data.cache.size || 0;
+        updateCacheStats();
+      }
+
+      // Update camera resolution display
+      if (data.camera) {
+        const res = document.getElementById('cameraRes');
+        if (data.camera.mode === 'mock' && data.camera.mock_current) {
+          res.textContent = `Mock: ${data.camera.mock_count} images`;
+        } else if (data.camera.resolution) {
+          res.textContent = `${data.camera.resolution[0]}×${data.camera.resolution[1]}`;
+        }
+      }
+    } catch (e) {
+      // Server unreachable — camera handlers will manage status display
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // SESSION MANAGEMENT
+  // ─────────────────────────────────────────────────────────────
+
+  /**
+   * Add a scanned card result to the session and update all UI elements.
+   * @param {Object} card - Scan result matching process_image() return format
+   */
+  function addCardToSession(card) {
+    // Parse price value (strip $ sign, handle N/A)
+    const priceNum = card.price.startsWith('$')
+      ? parseFloat(card.price.slice(1))
+      : 0;
+
+    // Update session state
+    session.cards.unshift(card);     // newest first
+    session.totalValue += priceNum;
+    if (card.stamp_1st) session.firstEdCount++;
+
+    // Update all UI elements
+    updateStats();
+    updateHistory();
+    updateFooter();
+  }
+
+  /**
+   * Clear all session data and reset UI to initial state.
+   */
+  function clearSession() {
+    session = { cards: [], totalValue: 0, firstEdCount: 0 };
+    cacheState = { hits: 0, misses: 0, size: 0 };
+    mockIndex = 0;
+    updateStats();
+    updateHistory();
+    updateFooter();
+    updateCacheStats();
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // UI UPDATE FUNCTIONS
+  // ─────────────────────────────────────────────────────────────
+
+  /**
+   * Update the three stat cells in the stats bar.
+   */
+  function updateStats() {
+    const count = session.cards.length;
+    const avg = count > 0 ? session.totalValue / count : 0;
+
+    document.getElementById('statTotal').textContent = formatPrice(session.totalValue);
+    document.getElementById('statCards').textContent = count;
+    document.getElementById('statAvg').textContent = formatPrice(avg);
+  }
+
+  /**
+   * Rebuild the scan history list from session state.
+   * Shows empty state when no cards are present.
+   */
+  function updateHistory() {
+    const list = document.getElementById('historyList');
+    const empty = document.getElementById('emptyState');
+    const countEl = document.getElementById('historyCount');
+
+    if (session.cards.length === 0) {
+      // Show empty state, clear any card rows
+      list.innerHTML = '';
+      list.appendChild(empty);
+      empty.style.display = 'flex';
+      countEl.textContent = '0 cards';
+      return;
+    }
+
+    // Hide empty state, rebuild card list
+    empty.style.display = 'none';
+
+    // Build HTML for all cards (newest first — already sorted in array)
+    let html = '';
+    session.cards.forEach((card, i) => {
+      const isNew = (i === 0);  // only animate the most recent
+      html += buildCardRow(card, isNew);
+    });
+
+    list.innerHTML = html;
+  }
+
+  /**
+   * Update the persistent footer with running total and counts.
+   */
+  function updateFooter() {
+    const count = session.cards.length;
+    document.getElementById('runningTotal').textContent = formatPrice(session.totalValue);
+    document.getElementById('sessionMeta').textContent =
+      `${count} card${count !== 1 ? 's' : ''} · ${session.firstEdCount} first ed`;
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // HTML BUILDERS
+  // ─────────────────────────────────────────────────────────────
+
+  /**
+   * Build HTML for a single scan card row in the history list.
+   * @param {Object} card - Scan result object
+   * @param {boolean} isNew - If true, apply slide-in animation
+   * @returns {string} HTML string
+   */
+  function buildCardRow(card, isNew) {
+    // ── Error card guard ──
+    if (card.error && !card.name) {
+      return `
+        <div class="scan-card ${isNew ? 'new-entry' : ''}">
+          <div class="scan-thumb"><span class="scan-thumb-placeholder">⚠️</span></div>
+          <div class="scan-info">
+            <div class="scan-name" style="color:var(--accent-red)">Scan Error</div>
+            <div class="scan-meta">${card.error}</div>
+            <div class="scan-meta-row"><span style="font-size:10px;color:var(--text-muted)">${(card.time || 0).toFixed(1)}s</span></div>
+          </div>
+          <div class="scan-price"><div class="scan-price-value">—</div></div>
+        </div>`;
+    }
+    const priceNum = card.price.startsWith('$')
+      ? parseFloat(card.price.slice(1))
+      : 0;
+
+    // $50+ cards get gold price highlight
+    const priceClass = priceNum >= 50 ? 'high-value' : '';
+
+    // Edition badge
+    const edBadge = card.stamp_1st
+      ? '<span class="badge badge-1st">1ST</span>'
+      : '<span class="badge badge-unl">UNL</span>';
+
+    // ID method badge — color coded by method
+    const methodBadge = buildMethodBadge(card.id_method);
+
+    // Variant display label (e.g. "NM · 1st Ed" or "NM · Unlimited")
+    const variantLabel = formatVariant(card.price_variant);
+
+    // Cached indicator — shows when price was served from cache
+    const cachedTag = card._cached
+      ? '<span style="font-size:9px;color:var(--text-muted);margin-left:4px" title="Price from cache">⚡cached</span>'
+      : '';
+
+    return `
+      <div class="scan-card ${isNew ? 'new-entry' : ''}">
+        <div class="scan-thumb">
+          <span class="scan-thumb-placeholder">🃏</span>
+        </div>
+        <div class="scan-info">
+          <div class="scan-name">${card.name}</div>
+          <div class="scan-meta">${card.set_name} · ${card.number}/${card.total} · ${card.rarity}</div>
+          <div class="scan-meta-row">
+            ${edBadge}
+            ${methodBadge}
+            ${card.hash_distance !== null ? `<span style="font-size:10px;color:var(--text-muted)">Δ${card.hash_distance}</span>` : ''}
+            <span style="font-size:10px;color:var(--text-muted)">${(card.time || 0).toFixed(1)}s</span>
+          </div>
+        </div>
+        <div class="scan-price">
+          <div class="scan-price-value ${priceClass}">${card.price}</div>
+          <div class="scan-price-condition">${variantLabel}${cachedTag}</div>
+        </div>
+      </div>`;
+  }
+
+  /**
+   * Build a color-coded badge for the card identification method.
+   * @param {string} method - One of: hash, ocr, ocr+hash, ocr (hash disagree)
+   * @returns {string} HTML badge element
+   */
+  function buildMethodBadge(method) {
+    const badges = {
+      'hash':                  { cls: 'badge-hash',     label: 'HASH' },
+      'ocr':                   { cls: 'badge-ocr',      label: 'OCR' },
+      'ocr+hash':              { cls: 'badge-ocr-hash', label: 'OCR+H' },
+      'ocr (hash disagree)':   { cls: 'badge-ocr',      label: 'OCR!H' },
+    };
+    const b = badges[method] || { cls: 'badge-unl', label: method || '?' };
+    return `<span class="badge ${b.cls}">${b.label}</span>`;
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // FORMATTING HELPERS
+  // ─────────────────────────────────────────────────────────────
+
+  /**
+   * Format a number as a dollar price string.
+   * @param {number} val - Dollar amount
+   * @returns {string} Formatted price (e.g. "$1,234.56")
+   */
+  function formatPrice(val) {
+    return '$' + val.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  }
+
+  /**
+   * Convert a variant key (from pricing_justtcg.py) to a display label.
+   * e.g. "1st_ed_nm" → "NM · 1st Edition"
+   *      "unlimited_nm" → "NM · Unlimited"
+   * @param {string} variant - Variant key from scan result
+   * @returns {string} Human-readable label
+   */
+  function formatVariant(variant) {
+    if (!variant) return '';
+
+    // Extract condition from end of variant key
+    const condMap = {
+      'nm': 'NM', 'lp': 'LP', 'mp': 'MP', 'hp': 'HP', 'dmg': 'DMG'
+    };
+
+    // Split on last underscore to get condition
+    const parts = variant.split('_');
+    const condKey = parts[parts.length - 1];
+    const cond = condMap[condKey] || condKey.toUpperCase();
+
+    // Determine edition from prefix
+    if (variant.startsWith('1st_ed')) return `${cond} · 1st Edition`;
+    if (variant.startsWith('unlimited')) return `${cond} · Unlimited`;
+    return `${cond}`;
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // KEYBOARD SHORTCUTS
+  // ─────────────────────────────────────────────────────────────
+  document.addEventListener('keydown', (e) => {
+    // Enter or Space triggers scan (if not typing in an input)
+    if ((e.key === 'Enter' || e.key === ' ') && e.target === document.body) {
+      e.preventDefault();
+      scanCard();
+    }
+    // T toggles theme
+    if (e.key === 't' && e.target === document.body) {
+      toggleTheme();
+    }
+    // P toggles pricing mode
+    if (e.key === 'p' && e.target === document.body) {
+      togglePricingMode();
+    }
+  });
+
+  // ─────────────────────────────────────────────────────────────
+  // INIT
+  // ─────────────────────────────────────────────────────────────
+  loadSavedTheme();
+  pollStatus();
+  setInterval(pollStatus, 30000);  // Refresh status every 30s
+</script>
+
+</body>
+</html>

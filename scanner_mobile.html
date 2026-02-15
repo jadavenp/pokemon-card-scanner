@@ -1,0 +1,1202 @@
+<!--
+  ╔══════════════════════════════════════════════════════════════════╗
+  ║  Card Scanner — Mobile UI                                       ║
+  ║  All C's Coins, Comics & Collectibles                           ║
+  ║                                                                  ║
+  ║  Phone-optimized scanner interface. Captures card images via     ║
+  ║  the phone's rear camera, uploads to the server for             ║
+  ║  identification and pricing, displays results inline.            ║
+  ║                                                                  ║
+  ║  Architecture:                                                   ║
+  ║    Phone (this UI) → POST /scan/upload → server.py               ║
+  ║    → process_image() → JSON result → displayed here              ║
+  ║                                                                  ║
+  ║  Data contract (matches process_image() return dict):            ║
+  ║    { name, set_name, number, total, card_id, rarity,            ║
+  ║      stamp_1st, stamp_conf, price, price_variant, id_method,    ║
+  ║      hash_distance, name_conf, num_conf, time, file, error }    ║
+  ╚══════════════════════════════════════════════════════════════════╝
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Card Scan">
+<meta name="theme-color" content="#09090b">
+<title>Card Scanner — All C's Collectibles</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Outfit:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+
+<style>
+/* ═══════════════════════════════════════════════════════════════
+   MOBILE SCANNER — Industrial card-grading aesthetic
+   Designed for one-handed use at the store counter.
+   Dark theme only — matches the desktop dashboard.
+   ═══════════════════════════════════════════════════════════════ */
+
+:root {
+  --bg:          #09090b;
+  --surface:     #111114;
+  --surface2:    #1a1a1f;
+  --surface3:    #222228;
+  --border:      #2a2a32;
+  --border-hi:   #3a3a45;
+  --text:        #e8e8ec;
+  --text-dim:    #9898a8;
+  --text-muted:  #585868;
+  --gold:        #d4a843;
+  --gold-dim:    #a07e2e;
+  --gold-glow:   rgba(212, 168, 67, 0.15);
+  --green:       #2dd4a0;
+  --green-dim:   rgba(45, 212, 160, 0.12);
+  --red:         #f05252;
+  --red-dim:     rgba(240, 82, 82, 0.12);
+  --blue:        #5b8def;
+  --blue-dim:    rgba(91, 141, 239, 0.12);
+  --purple:      #a78bfa;
+  --purple-dim:  rgba(139, 92, 246, 0.12);
+  --radius:      12px;
+  --radius-sm:   8px;
+  --radius-lg:   16px;
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-top:    env(safe-area-inset-top, 0px);
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html {
+  background: var(--bg);
+  color: var(--text);
+  -webkit-text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  overscroll-behavior: none;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   HEADER — Compact, shows branding + connection status
+   ═══════════════════════════════════════════════════════════════ */
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: calc(12px + var(--safe-top)) 16px 10px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+.header-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.header-logo {
+  width: 30px; height: 30px;
+  background: linear-gradient(135deg, var(--gold), var(--gold-dim));
+  border-radius: 7px;
+  display: flex; align-items: center; justify-content: center;
+  font-family: 'Outfit', sans-serif;
+  font-weight: 900; font-size: 14px;
+  color: var(--bg);
+}
+
+.header-title {
+  font-family: 'Outfit', sans-serif;
+  font-weight: 700; font-size: 15px;
+  color: var(--text);
+  letter-spacing: -0.3px;
+}
+.header-title span { color: var(--gold); font-weight: 500; font-size: 12px; }
+
+.header-status {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 11px; color: var(--text-muted);
+}
+
+.status-dot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+.status-dot.connected {
+  background: var(--green);
+  box-shadow: 0 0 6px var(--green);
+  animation: pulse 2s infinite;
+}
+@keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.5; } }
+
+/* ═══════════════════════════════════════════════════════════════
+   STATS BAR — Three key metrics, always visible
+   ═══════════════════════════════════════════════════════════════ */
+
+.stats-bar {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1px;
+  background: var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.stat {
+  background: var(--surface);
+  padding: 10px 8px;
+  text-align: center;
+}
+
+.stat-val {
+  font-family: 'Outfit', sans-serif;
+  font-weight: 800;
+  font-size: 20px;
+  letter-spacing: -0.5px;
+  line-height: 1.1;
+}
+.stat-val.gold  { color: var(--gold); }
+.stat-val.green { color: var(--green); }
+.stat-val.blue  { color: var(--blue); }
+
+.stat-lbl {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 1.2px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   MAIN CONTENT — Camera / Results area
+   ═══════════════════════════════════════════════════════════════ */
+
+.content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* ─── Camera Section ─── */
+
+.camera-section {
+  position: relative;
+  background: #050507;
+  border-bottom: 1px solid var(--border);
+}
+
+.camera-container {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  max-height: 45dvh;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.camera-container video {
+  width: 100%; height: 100%;
+  object-fit: cover;
+}
+
+.camera-container canvas {
+  display: none; /* hidden capture canvas */
+}
+
+/* Card alignment guide overlay */
+.card-guide {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.card-guide-rect {
+  width: 62%;
+  aspect-ratio: 2.5 / 3.5; /* Standard card ratio */
+  border: 2px solid rgba(212, 168, 67, 0.35);
+  border-radius: 10px;
+  position: relative;
+}
+
+.card-guide-label {
+  position: absolute;
+  bottom: -24px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 10px;
+  color: rgba(212, 168, 67, 0.5);
+  white-space: nowrap;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+
+/* Scan flash animation */
+.scan-flash {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+}
+.scan-flash.active {
+  animation: flash 0.8s ease-out;
+}
+.scan-flash::after {
+  content: '';
+  position: absolute;
+  inset: 8%;
+  border: 2px solid var(--gold);
+  border-radius: 12px;
+  box-shadow: 0 0 40px var(--gold-glow), inset 0 0 40px var(--gold-glow);
+}
+@keyframes flash { 0% { opacity:0; } 12% { opacity:1; } 100% { opacity:0; } }
+
+/* Camera not available placeholder */
+.camera-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  color: var(--text-muted);
+  padding: 40px 20px;
+  text-align: center;
+}
+.camera-placeholder-icon {
+  font-size: 36px;
+  width: 64px; height: 64px;
+  border: 2px dashed var(--border-hi);
+  border-radius: 12px;
+  display: flex; align-items: center; justify-content: center;
+}
+.camera-placeholder p { font-size: 12px; }
+
+/* ─── Action Bar (below camera) ─── */
+
+.action-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 14px 16px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.btn {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 10px 20px;
+  border: 1px solid var(--border-hi);
+  border-radius: var(--radius-sm);
+  background: var(--surface2);
+  color: var(--text);
+  cursor: pointer;
+  transition: all 0.15s;
+  letter-spacing: 0.5px;
+  -webkit-appearance: none;
+  touch-action: manipulation;
+}
+
+.btn-scan {
+  flex: 1;
+  max-width: 200px;
+  padding: 14px 24px;
+  font-size: 14px;
+  font-weight: 700;
+  background: linear-gradient(135deg, var(--gold), var(--gold-dim));
+  color: var(--bg);
+  border-color: var(--gold);
+  border-radius: var(--radius);
+  letter-spacing: 1px;
+}
+.btn-scan:active { transform: scale(0.97); filter: brightness(0.9); }
+.btn-scan:disabled { opacity: 0.5; transform: none; }
+
+.btn-secondary { font-size: 11px; padding: 10px 14px; }
+.btn-secondary:active { background: var(--surface3); }
+
+.btn-danger { border-color: var(--red); color: var(--red); }
+.btn-danger:active { background: var(--red-dim); }
+
+/* Pricing mode compact toggle */
+.pricing-pill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  font-size: 10px;
+  color: var(--text-muted);
+  cursor: pointer;
+  touch-action: manipulation;
+  user-select: none;
+}
+.pricing-pill-dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  transition: all 0.2s;
+}
+.pricing-pill.single .pricing-pill-dot {
+  background: var(--green);
+  box-shadow: 0 0 4px var(--green);
+}
+.pricing-pill-label {
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   LAST RESULT — Most recent scan, prominently displayed
+   ═══════════════════════════════════════════════════════════════ */
+
+.last-result {
+  display: none; /* hidden until first scan */
+  padding: 16px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  animation: resultSlide 0.35s ease-out;
+}
+.last-result.visible { display: block; }
+@keyframes resultSlide { 0% { opacity:0; transform:translateY(12px); } 100% { opacity:1; transform:translateY(0); } }
+
+.result-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.result-name {
+  font-family: 'Outfit', sans-serif;
+  font-weight: 800;
+  font-size: 22px;
+  color: #fff;
+  line-height: 1.15;
+  letter-spacing: -0.3px;
+}
+
+.result-price {
+  font-family: 'Outfit', sans-serif;
+  font-weight: 900;
+  font-size: 26px;
+  color: var(--green);
+  white-space: nowrap;
+  letter-spacing: -0.5px;
+}
+.result-price.high-value { color: var(--gold); }
+
+.result-meta {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.result-badges {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+
+.badge {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 4px;
+  letter-spacing: 0.5px;
+}
+.badge-1st { background: var(--gold-glow); color: var(--gold); border: 1px solid rgba(212,168,67,0.25); }
+.badge-unl { color: var(--text-muted); border: 1px solid var(--border); }
+.badge-hash { background: var(--blue-dim); color: var(--blue); border: 1px solid rgba(91,141,239,0.2); }
+.badge-ocr { background: var(--green-dim); color: var(--green); border: 1px solid rgba(45,212,160,0.2); }
+.badge-ocr-hash { background: var(--purple-dim); color: var(--purple); border: 1px solid rgba(139,92,246,0.2); }
+.badge-err { background: var(--red-dim); color: var(--red); border: 1px solid rgba(240,82,82,0.2); }
+
+.result-detail {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+.result-error {
+  padding: 14px 16px;
+  background: var(--red-dim);
+  border: 1px solid rgba(240,82,82,0.2);
+  border-radius: var(--radius-sm);
+  color: var(--red);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   SCAN HISTORY — Scrollable list below the latest result
+   ═══════════════════════════════════════════════════════════════ */
+
+.history-section {
+  flex: 1;
+  background: var(--bg);
+}
+
+.history-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+  z-index: 10;
+}
+.history-label span {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 1.2px;
+  color: var(--text-muted);
+}
+
+.history-list { padding: 0; }
+
+.history-empty {
+  padding: 40px 20px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.history-empty-icon { font-size: 28px; margin-bottom: 10px; }
+
+/* Individual history row — compact */
+.h-card {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  align-items: center;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.h-card.new { animation: hSlide 0.25s ease-out; }
+@keyframes hSlide { 0% { opacity:0; transform:translateX(16px); } 100% { opacity:1; transform:translateX(0); } }
+
+.h-name {
+  font-family: 'Outfit', sans-serif;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.h-meta {
+  font-size: 10px;
+  color: var(--text-muted);
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-top: 2px;
+}
+
+.h-price {
+  font-family: 'Outfit', sans-serif;
+  font-weight: 800;
+  font-size: 16px;
+  color: var(--green);
+  text-align: right;
+  white-space: nowrap;
+}
+.h-price.high { color: var(--gold); }
+
+.h-price-sub {
+  font-size: 9px;
+  color: var(--text-muted);
+  text-align: right;
+  margin-top: 1px;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   FOOTER — Running total, always visible at bottom
+   ═══════════════════════════════════════════════════════════════ */
+
+.footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px calc(10px + var(--safe-bottom));
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  position: sticky;
+  bottom: 0;
+  z-index: 100;
+}
+
+.footer-label {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 1.2px;
+  color: var(--text-muted);
+}
+
+.footer-count {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.footer-total {
+  font-family: 'Outfit', sans-serif;
+  font-weight: 900;
+  font-size: 24px;
+  color: var(--gold);
+  letter-spacing: -0.5px;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   SCANNING STATE OVERLAY — covers camera while processing
+   ═══════════════════════════════════════════════════════════════ */
+
+.scanning-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(9, 9, 11, 0.75);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 12px;
+  z-index: 20;
+}
+.scanning-overlay.active { display: flex; }
+
+.scan-spinner {
+  width: 36px; height: 36px;
+  border: 3px solid var(--border-hi);
+  border-top-color: var(--gold);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.scan-status-text {
+  font-size: 12px;
+  color: var(--gold);
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   TOAST — Brief notifications
+   ═══════════════════════════════════════════════════════════════ */
+
+.toast {
+  position: fixed;
+  top: calc(16px + var(--safe-top));
+  left: 50%;
+  transform: translateX(-50%) translateY(-100px);
+  padding: 10px 20px;
+  background: var(--surface3);
+  border: 1px solid var(--border-hi);
+  border-radius: 20px;
+  font-size: 12px;
+  color: var(--text);
+  z-index: 200;
+  pointer-events: none;
+  opacity: 0;
+  transition: all 0.3s ease;
+}
+.toast.show {
+  transform: translateX(-50%) translateY(0);
+  opacity: 1;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   SCROLLBAR
+   ═══════════════════════════════════════════════════════════════ */
+.content::-webkit-scrollbar { width: 3px; }
+.content::-webkit-scrollbar-track { background: transparent; }
+.content::-webkit-scrollbar-thumb { background: var(--border-hi); border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<!-- ═══ HEADER ═══ -->
+<header class="header">
+  <div class="header-brand">
+    <div class="header-logo">AC</div>
+    <div class="header-title">Card Scanner <span>Mobile</span></div>
+  </div>
+  <div class="header-status">
+    <span class="status-dot" id="statusDot"></span>
+    <span id="statusLabel">Connecting</span>
+  </div>
+</header>
+
+<!-- ═══ STATS BAR ═══ -->
+<div class="stats-bar">
+  <div class="stat">
+    <div class="stat-val gold" id="statValue">$0.00</div>
+    <div class="stat-lbl">Session</div>
+  </div>
+  <div class="stat">
+    <div class="stat-val green" id="statCards">0</div>
+    <div class="stat-lbl">Scanned</div>
+  </div>
+  <div class="stat">
+    <div class="stat-val blue" id="statAvg">$0.00</div>
+    <div class="stat-lbl">Average</div>
+  </div>
+</div>
+
+<!-- ═══ MAIN CONTENT ═══ -->
+<div class="content">
+
+  <!-- Camera -->
+  <div class="camera-section">
+    <div class="camera-container" id="cameraContainer">
+      <video id="cameraVideo" autoplay playsinline muted></video>
+      <canvas id="captureCanvas"></canvas>
+      <div class="camera-placeholder" id="cameraPlaceholder" style="display:none;">
+        <div class="camera-placeholder-icon">📷</div>
+        <p>Camera access required</p>
+        <p style="font-size:11px;margin-top:4px;">Tap to retry</p>
+      </div>
+      <div class="card-guide" id="cardGuide">
+        <div class="card-guide-rect">
+          <div class="card-guide-label">Align card here</div>
+        </div>
+      </div>
+      <div class="scan-flash" id="scanFlash"></div>
+      <div class="scanning-overlay" id="scanningOverlay">
+        <div class="scan-spinner"></div>
+        <div class="scan-status-text">Scanning...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Action Bar -->
+  <div class="action-bar">
+    <div class="pricing-pill" id="pricingPill" onclick="togglePricing()">
+      <div class="pricing-pill-dot"></div>
+      <span class="pricing-pill-label" id="pricingLabel">Batch</span>
+    </div>
+    <button class="btn btn-scan" id="btnScan" onclick="scanCard()">SCAN</button>
+    <button class="btn btn-secondary btn-danger" onclick="clearSession()">Clear</button>
+  </div>
+
+  <!-- Last Result -->
+  <div class="last-result" id="lastResult"></div>
+
+  <!-- Scan History -->
+  <div class="history-section">
+    <div class="history-label">
+      <span>History</span>
+      <span id="historyCount">0 cards</span>
+    </div>
+    <div class="history-list" id="historyList">
+      <div class="history-empty" id="historyEmpty">
+        <div class="history-empty-icon">🃏</div>
+        <p>Scan a card to get started</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ FOOTER ═══ -->
+<div class="footer">
+  <div>
+    <div class="footer-label">Running Total</div>
+    <div class="footer-count" id="footerCount">0 cards · 0 first ed</div>
+  </div>
+  <div class="footer-total" id="footerTotal">$0.00</div>
+</div>
+
+<!-- ═══ TOAST ═══ -->
+<div class="toast" id="toast"></div>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     JAVASCRIPT
+     ═══════════════════════════════════════════════════════════════ -->
+<script>
+// ─────────────────────────────────────────────────────────────
+// STATE
+// ─────────────────────────────────────────────────────────────
+const session = { cards: [], totalValue: 0, firstEdCount: 0 };
+let pricingMode = 'batch';
+let cameraStream = null;
+let scanning = false;
+let serverOnline = false;
+
+// ─────────────────────────────────────────────────────────────
+// CAMERA — Rear camera via getUserMedia
+// ─────────────────────────────────────────────────────────────
+
+async function initCamera() {
+  const video = document.getElementById('cameraVideo');
+  const placeholder = document.getElementById('cameraPlaceholder');
+
+  try {
+    // Request rear camera with reasonable resolution
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        facingMode: { ideal: 'environment' },
+        width:  { ideal: 1920 },
+        height: { ideal: 1080 },
+      },
+      audio: false,
+    });
+
+    video.srcObject = stream;
+    cameraStream = stream;
+    video.style.display = 'block';
+    placeholder.style.display = 'none';
+
+    // Get actual resolution once video starts
+    video.addEventListener('loadedmetadata', () => {
+      const w = video.videoWidth;
+      const h = video.videoHeight;
+      console.log(`Camera: ${w}x${h}`);
+    });
+
+  } catch (err) {
+    console.error('Camera error:', err);
+    video.style.display = 'none';
+    placeholder.style.display = 'flex';
+    placeholder.onclick = initCamera;
+  }
+}
+
+/**
+ * Capture the current video frame, CROPPED to the card alignment guide.
+ * 
+ * The gold rectangle overlay is 62% of the container width with a 2.5:3.5
+ * aspect ratio (standard card). We crop the video frame to match that
+ * region so the server only sees the card — no background/table.
+ * This makes OCR Y-positions accurate (card name = top of image).
+ * 
+ * Output is resized to max 800px on longest edge.
+ */
+function captureFrame() {
+  const video = document.getElementById('cameraVideo');
+  const canvas = document.getElementById('captureCanvas');
+
+  if (!video.videoWidth) return null;
+
+  const srcW = video.videoWidth;
+  const srcH = video.videoHeight;
+
+  // The card guide is centered, 62% width, 2.5:3.5 aspect ratio
+  // Mirror the same math used for the CSS overlay
+  const guideWidthRatio = 0.62;
+  const cardAspect = 2.5 / 3.5; // width / height
+
+  // The video uses object-fit: cover, so we need to figure out
+  // how the video maps to the container to get the right crop region.
+  // With cover, the video fills the container and overflows are clipped.
+  const container = document.getElementById('cameraContainer');
+  const contW = container.clientWidth;
+  const contH = container.clientHeight;
+
+  // Determine video scaling under object-fit: cover
+  const videoAspect = srcW / srcH;
+  const contAspect = contW / contH;
+
+  let renderW, renderH, offsetX, offsetY;
+  if (videoAspect > contAspect) {
+    // Video is wider — height fits, width overflows
+    renderH = contH;
+    renderW = contH * videoAspect;
+    offsetX = (renderW - contW) / 2;
+    offsetY = 0;
+  } else {
+    // Video is taller — width fits, height overflows
+    renderW = contW;
+    renderH = contW / videoAspect;
+    offsetX = 0;
+    offsetY = (renderH - contH) / 2;
+  }
+
+  // Guide rectangle in container coordinates (centered)
+  const guideW = contW * guideWidthRatio;
+  const guideH = guideW / cardAspect;
+  const guideX = (contW - guideW) / 2;
+  const guideY = (contH - guideH) / 2;
+
+  // Convert container coords to video pixel coords
+  const scaleX = srcW / renderW;
+  const scaleY = srcH / renderH;
+
+  const cropX = Math.round((guideX + offsetX) * scaleX);
+  const cropY = Math.round((guideY + offsetY) * scaleY);
+  const cropW = Math.round(guideW * scaleX);
+  const cropH = Math.round(guideH * scaleY);
+
+  // Clamp to video bounds
+  const sx = Math.max(0, Math.min(cropX, srcW - 1));
+  const sy = Math.max(0, Math.min(cropY, srcH - 1));
+  const sw = Math.min(cropW, srcW - sx);
+  const sh = Math.min(cropH, srcH - sy);
+
+  // Resize cropped region to max 800px
+  const MAX_DIM = 800;
+  let destW, destH;
+  if (sw > sh) {
+    destW = Math.min(sw, MAX_DIM);
+    destH = Math.round(destW * (sh / sw));
+  } else {
+    destH = Math.min(sh, MAX_DIM);
+    destW = Math.round(destH * (sw / sh));
+  }
+
+  canvas.width = destW;
+  canvas.height = destH;
+  const ctx = canvas.getContext('2d');
+  // drawImage(source, sx, sy, sw, sh, dx, dy, dw, dh)
+  ctx.drawImage(video, sx, sy, sw, sh, 0, 0, destW, destH);
+
+  return new Promise(resolve => {
+    canvas.toBlob(blob => resolve(blob), 'image/jpeg', 0.90);
+  });
+}
+
+// ─────────────────────────────────────────────────────────────
+// SCAN — Capture + Upload to server
+// ─────────────────────────────────────────────────────────────
+
+async function scanCard() {
+  if (scanning) return;
+  scanning = true;
+
+  const btn = document.getElementById('btnScan');
+  const overlay = document.getElementById('scanningOverlay');
+  const flash = document.getElementById('scanFlash');
+
+  // UI: scanning state
+  btn.disabled = true;
+  btn.textContent = '...';
+  overlay.classList.add('active');
+
+  // Flash effect
+  flash.classList.remove('active');
+  void flash.offsetWidth;
+  flash.classList.add('active');
+
+  try {
+    // 1. Capture frame
+    const blob = await captureFrame();
+    if (!blob) throw new Error('Camera not ready');
+
+    // Brief freeze effect — show the captured frame as feedback
+    const video = document.getElementById('cameraVideo');
+    video.style.opacity = '0.4';
+    setTimeout(() => { video.style.opacity = '1'; }, 600);
+
+    // 2. Upload to server
+    const formData = new FormData();
+    formData.append('image', blob, 'card.jpg');
+
+    const useCache = pricingMode === 'batch';
+    const response = await fetch(`/scan/upload?use_cache=${useCache}`, {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.error || `Server error ${response.status}`);
+    }
+
+    const data = await response.json();
+    const card = data.result;
+
+    // Add to session
+    addCardToSession(card);
+    showLastResult(card);
+
+    // Mark server connected
+    setServerStatus(true);
+
+  } catch (err) {
+    console.error('Scan failed:', err);
+    showToast(err.message || 'Scan failed');
+
+    if (err.message.includes('fetch') || err.message.includes('Failed')) {
+      setServerStatus(false);
+    }
+  }
+
+  // UI: reset
+  overlay.classList.remove('active');
+  btn.disabled = false;
+  btn.textContent = 'SCAN';
+  scanning = false;
+}
+
+// ─────────────────────────────────────────────────────────────
+// SESSION STATE
+// ─────────────────────────────────────────────────────────────
+
+function addCardToSession(card) {
+  const priceNum = card.price && card.price.startsWith('$')
+    ? parseFloat(card.price.slice(1)) : 0;
+
+  session.cards.unshift(card);
+  session.totalValue += priceNum;
+  if (card.stamp_1st) session.firstEdCount++;
+
+  updateStats();
+  updateHistory();
+  updateFooter();
+}
+
+function clearSession() {
+  session.cards = [];
+  session.totalValue = 0;
+  session.firstEdCount = 0;
+
+  updateStats();
+  updateHistory();
+  updateFooter();
+
+  document.getElementById('lastResult').classList.remove('visible');
+  document.getElementById('lastResult').innerHTML = '';
+  showToast('Session cleared');
+}
+
+// ─────────────────────────────────────────────────────────────
+// UI UPDATES
+// ─────────────────────────────────────────────────────────────
+
+function updateStats() {
+  const count = session.cards.length;
+  const avg = count > 0 ? session.totalValue / count : 0;
+  document.getElementById('statValue').textContent = fmtPrice(session.totalValue);
+  document.getElementById('statCards').textContent = count;
+  document.getElementById('statAvg').textContent = fmtPrice(avg);
+}
+
+function updateFooter() {
+  const count = session.cards.length;
+  document.getElementById('footerTotal').textContent = fmtPrice(session.totalValue);
+  document.getElementById('footerCount').textContent =
+    `${count} card${count !== 1 ? 's' : ''} · ${session.firstEdCount} first ed`;
+}
+
+function updateHistory() {
+  const list = document.getElementById('historyList');
+  const empty = document.getElementById('historyEmpty');
+  const countEl = document.getElementById('historyCount');
+
+  countEl.textContent = `${session.cards.length} cards`;
+
+  if (session.cards.length === 0) {
+    list.innerHTML = `<div class="history-empty" id="historyEmpty">
+      <div class="history-empty-icon">🃏</div>
+      <p>Scan a card to get started</p>
+    </div>`;
+    return;
+  }
+
+  // Skip first card (shown in lastResult) — show rest in compact history
+  const rest = session.cards.slice(1);
+  list.innerHTML = rest.map((card, i) => {
+    if (card.error && !card.name) {
+      return `<div class="h-card">
+        <div><div class="h-name" style="color:var(--red)">Error</div>
+        <div class="h-meta">${card.error}</div></div>
+        <div><div class="h-price" style="color:var(--text-muted)">—</div></div>
+      </div>`;
+    }
+
+    const priceNum = card.price && card.price.startsWith('$') ? parseFloat(card.price.slice(1)) : 0;
+    const priceClass = priceNum >= 50 ? 'high' : '';
+    const ed = card.stamp_1st ? '1st' : 'Unl';
+    const method = { 'hash':'H', 'ocr':'OCR', 'ocr+hash':'O+H', 'ocr (hash disagree)':'O!H' }[card.id_method] || '?';
+
+    return `<div class="h-card ${i === 0 ? 'new' : ''}">
+      <div>
+        <div class="h-name">${card.name || '?'}</div>
+        <div class="h-meta">
+          <span>${card.set_name || '?'}</span>
+          <span>${card.number || '?'}/${card.total || '?'}</span>
+          <span>${ed}</span>
+          <span>${method}</span>
+          <span>${(card.time || 0).toFixed(1)}s</span>
+        </div>
+      </div>
+      <div>
+        <div class="h-price ${priceClass}">${card.price || 'N/A'}</div>
+        <div class="h-price-sub">${fmtVariant(card.price_variant)}</div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function showLastResult(card) {
+  const el = document.getElementById('lastResult');
+
+  if (card.error && !card.name) {
+    el.innerHTML = `<div class="result-error">${card.error}</div>`;
+    el.classList.add('visible');
+    // Re-trigger animation
+    el.style.animation = 'none';
+    void el.offsetWidth;
+    el.style.animation = '';
+    return;
+  }
+
+  const priceNum = card.price && card.price.startsWith('$') ? parseFloat(card.price.slice(1)) : 0;
+  const priceClass = priceNum >= 50 ? 'high-value' : '';
+
+  const edBadge = card.stamp_1st
+    ? '<span class="badge badge-1st">1ST ED</span>'
+    : '<span class="badge badge-unl">UNL</span>';
+
+  const methodMap = {
+    'hash': { cls: 'badge-hash', lbl: 'HASH' },
+    'ocr': { cls: 'badge-ocr', lbl: 'OCR' },
+    'ocr+hash': { cls: 'badge-ocr-hash', lbl: 'OCR+HASH' },
+    'ocr (hash disagree)': { cls: 'badge-ocr', lbl: 'OCR!H' },
+  };
+  const m = methodMap[card.id_method] || { cls: 'badge-unl', lbl: card.id_method || '?' };
+  const methodBadge = `<span class="badge ${m.cls}">${m.lbl}</span>`;
+
+  el.innerHTML = `
+    <div class="result-header">
+      <div>
+        <div class="result-name">${card.name || '?'}</div>
+        <div class="result-meta">${card.set_name || '?'} · ${card.number || '?'}/${card.total || '?'} · ${card.rarity || '?'}</div>
+        <div class="result-badges">
+          ${edBadge}
+          ${methodBadge}
+          ${card.hash_distance != null ? `<span class="badge" style="background:var(--surface3);color:var(--text-dim);border:1px solid var(--border)">\u0394${card.hash_distance}</span>` : ''}
+          <span class="badge" style="background:var(--surface3);color:var(--text-dim);border:1px solid var(--border)">${(card.time || 0).toFixed(1)}s</span>
+          ${card.name_conf ? `<span class="badge" style="background:var(--surface3);color:var(--text-dim);border:1px solid var(--border)">OCR ${card.name_conf}%</span>` : ''}
+        </div>
+        <div class="result-detail">${fmtVariant(card.price_variant)}${card.stamp_1st ? ' · Stamp ' + card.stamp_conf + '%' : ''}</div>
+      </div>
+      <div class="result-price ${priceClass}">${card.price || 'N/A'}</div>
+    </div>`;
+
+  el.classList.add('visible');
+  // Re-trigger animation
+  el.style.animation = 'none';
+  void el.offsetWidth;
+  el.style.animation = '';
+}
+
+// ─────────────────────────────────────────────────────────────
+// PRICING MODE TOGGLE
+// ─────────────────────────────────────────────────────────────
+
+function togglePricing() {
+  pricingMode = pricingMode === 'batch' ? 'single' : 'batch';
+  const pill = document.getElementById('pricingPill');
+  const label = document.getElementById('pricingLabel');
+  if (pricingMode === 'single') {
+    pill.classList.add('single');
+    label.textContent = 'Single';
+  } else {
+    pill.classList.remove('single');
+    label.textContent = 'Batch';
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// SERVER STATUS
+// ─────────────────────────────────────────────────────────────
+
+function setServerStatus(online) {
+  serverOnline = online;
+  const dot = document.getElementById('statusDot');
+  const label = document.getElementById('statusLabel');
+  if (online) {
+    dot.classList.add('connected');
+    label.textContent = 'Connected';
+  } else {
+    dot.classList.remove('connected');
+    label.textContent = 'Offline';
+  }
+}
+
+async function checkServer() {
+  try {
+    const r = await fetch('/api/status', { signal: AbortSignal.timeout(3000) });
+    if (r.ok) {
+      setServerStatus(true);
+      return;
+    }
+  } catch (e) {}
+  setServerStatus(false);
+}
+
+// ─────────────────────────────────────────────────────────────
+// HELPERS
+// ─────────────────────────────────────────────────────────────
+
+function fmtPrice(val) {
+  return '$' + val.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+
+function fmtVariant(variant) {
+  if (!variant) return '';
+  const condMap = { 'nm':'NM', 'lp':'LP', 'mp':'MP', 'hp':'HP', 'dmg':'DMG' };
+  const parts = variant.split('_');
+  const condKey = parts[parts.length - 1];
+  const cond = condMap[condKey] || condKey.toUpperCase();
+  if (variant.startsWith('1st_ed')) return `${cond} · 1st Ed`;
+  if (variant.startsWith('unlimited')) return `${cond} · Unlimited`;
+  return cond;
+}
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2500);
+}
+
+// ─────────────────────────────────────────────────────────────
+// KEYBOARD / GESTURE SHORTCUTS
+// ─────────────────────────────────────────────────────────────
+document.addEventListener('keydown', e => {
+  if ((e.key === 'Enter' || e.key === ' ') && e.target === document.body) {
+    e.preventDefault();
+    scanCard();
+  }
+});
+
+// ─────────────────────────────────────────────────────────────
+// INIT
+// ─────────────────────────────────────────────────────────────
+initCamera();
+checkServer();
+setInterval(checkServer, 15000);
+</script>
+</body>
+</html>

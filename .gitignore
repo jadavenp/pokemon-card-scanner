@@ -1,0 +1,24 @@
+venv/
+__pycache__/
+*.pyc
+.DS_Store
+.env
+.backup_*/
+data/ref_images/
+data/scan_results.html
+data/failed_downloads.json
+data/download_checkpoint.json
+data/*.jpg
+data/*.png
+data/*.zip
+data/*.xlsx
+data/*.raw.json
+__pycache__/
+data/Ref Images/
+data/card_index.json
+data/tcgplayer_id_map.json
+data/tcgplayer_shadowless_map.json
+data/hash_database.json
+key.pem
+cert.pem
+*.sh

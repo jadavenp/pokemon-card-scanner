@@ -138,3 +138,39 @@ def detect_and_crop_card(img, min_area_ratio=0.05, max_area_ratio=0.95):
 
     logger.info("No card detected in frame — using original image")
     return img, False
+
+
+def normalize_phone_capture(img):
+    """
+    Normalize a phone-captured card image for downstream processing.
+
+    Called when detect_and_crop_card() fails but the input is from a phone
+    upload (where the mobile UI's guide rectangle already frames the card).
+    In this case, the image IS the card — Canny fails because there's no
+    background for edge detection to find an edge against.
+
+    Ensures minimum width for OCR readability. Does NOT rotate — the mobile
+    UI is responsible for sending portrait-oriented crops via the guide
+    rectangle, and phone orientation lock prevents unexpected rotation.
+
+    Args:
+        img: BGR image (numpy array)
+
+    Returns:
+        (normalized_img, True) — always succeeds since we assume the phone
+        guide framed the card.
+    """
+    if img is None or img.size == 0:
+        return img, False
+
+    h, w = img.shape[:2]
+
+    # Ensure minimum width for OCR readability
+    if w < CARD_MIN_OUTPUT_WIDTH:
+        scale = CARD_MIN_OUTPUT_WIDTH / w
+        new_w = CARD_MIN_OUTPUT_WIDTH
+        new_h = int(h * scale)
+        img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_CUBIC)
+        logger.info("Phone capture upscaled: %dx%d → %dx%d", w, h, new_w, new_h)
+
+    return img, True

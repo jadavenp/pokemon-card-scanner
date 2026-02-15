@@ -30,6 +30,7 @@ Usage:
 
 import argparse
 import asyncio
+import json
 import logging
 import time
 import threading
@@ -434,10 +435,19 @@ async def scan_uploaded_image(
     saves it to a temp file, runs process_image(), and returns
     the same JSON structure as /scan.
 
+    Test Mode (Phase 1 hash testing):
+        Add ?test_mode=true&condition=bare to auto-save the uploaded
+        image to data/test_phone/capture_NNN.jpg and log scan results
+        to manifest.json. The scan still runs normally — this just
+        saves a side copy with metadata for later analysis by
+        test_phone.py. Condition values: bare, sleeve, toploader.
+
     Usage from phone JS:
         const formData = new FormData();
         formData.append('image', blob, 'card.jpg');
-        fetch('/scan/upload', { method: 'POST', body: formData });
+        fetch('/scan/upload?use_cache=true&test_mode=true&condition=bare', {
+            method: 'POST', body: formData
+        });
     """
     import shutil
     import tempfile
@@ -474,8 +484,11 @@ async def scan_uploaded_image(
             status_code=500,
         )
 
-    # ── Parse use_cache from query params ──
-    # Phone sends ?use_cache=true or ?use_cache=false
+    # ── Parse params ──
+    test_mode = (request.query_params.get("test_mode", "").lower() == "true") if request else False
+    test_condition = request.query_params.get("condition", "bare").strip() if request else "bare"
+    test_saved_as = None
+
     use_cache_param = request.query_params.get("use_cache", "true") if request else "true"
     use_cache = use_cache_param.lower() != "false"
 
@@ -496,20 +509,122 @@ async def scan_uploaded_image(
             content={"error": f"Scan failed: {str(e)}"},
             status_code=500,
         )
-    finally:
-        # Clean up temp file
+
+    # ── Test capture: auto-save + manifest (Phase 1 hash testing) ──
+    # Only saves when test_mode=true is passed from the mobile UI.
+    # Saves the raw upload as capture_NNN.jpg and appends scan results
+    # to manifest.json for later analysis by test_phone.py.
+    if test_mode:
         try:
-            Path(img_path).unlink(missing_ok=True)
-        except Exception:
-            pass
+            test_dir = PROJECT_DIR / "data" / "test_phone"
+            test_dir.mkdir(parents=True, exist_ok=True)
+            manifest_path = test_dir / "manifest.json"
+
+            # Load existing manifest (or start fresh)
+            manifest = []
+            if manifest_path.exists():
+                try:
+                    with open(manifest_path, "r") as mf:
+                        manifest = json.load(mf)
+                except (json.JSONDecodeError, Exception):
+                    manifest = []
+
+            # Sequential capture number
+            seq = len(manifest) + 1
+            test_filename = f"capture_{seq:03d}.jpg"
+            test_path = test_dir / test_filename
+
+            shutil.copy2(img_path, str(test_path))
+
+            # Append entry to manifest
+            manifest.append({
+                "seq": seq,
+                "file": test_filename,
+                "condition": test_condition,
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                "scan_result": {
+                    "card_id": result.get("card_id"),
+                    "name": result.get("name"),
+                    "set_name": result.get("set_name"),
+                    "number": result.get("number"),
+                    "id_method": result.get("id_method"),
+                    "hash_distance": result.get("hash_distance"),
+                    "name_conf": result.get("name_conf"),
+                    "num_conf": result.get("num_conf"),
+                    "price": result.get("price"),
+                    "stamp_1st": result.get("stamp_1st"),
+                    "time": result.get("time"),
+                },
+            })
+
+            with open(manifest_path, "w") as mf:
+                json.dump(manifest, mf, indent=2)
+
+            test_saved_as = test_filename
+            logger.info("Test capture saved: %s (seq %d, condition=%s)", test_filename, seq, test_condition)
+        except Exception as e:
+            logger.warning("Failed to save test capture: %s", e)
+
+    # Clean up temp file
+    try:
+        Path(img_path).unlink(missing_ok=True)
+    except Exception:
+        pass
 
     # ── Build response ──
     cache_stats = get_cache().stats()
 
-    return JSONResponse(content={
+    response_data = {
         "result": result,
         "cache": cache_stats,
         "scan_time": result.get("time", 0),
+    }
+
+    # Include test capture info in response so the UI can confirm saves
+    if test_saved_as:
+        response_data["test_capture"] = test_saved_as
+
+    return JSONResponse(content=response_data)
+
+
+# ──────────────── GET /test/captures ── Test Capture Status ────────────────
+
+@app.get("/test/captures")
+async def test_capture_status():
+    """
+    List all saved test captures from manifest.json in data/test_phone/.
+    Useful for checking progress without SSH-ing into the Jetson.
+    """
+    test_dir = PROJECT_DIR / "data" / "test_phone"
+    manifest_path = test_dir / "manifest.json"
+
+    if not manifest_path.exists():
+        return JSONResponse(content={"captures": [], "count": 0})
+
+    try:
+        with open(manifest_path, "r") as f:
+            manifest = json.load(f)
+    except (json.JSONDecodeError, Exception):
+        return JSONResponse(content={"captures": [], "count": 0, "error": "manifest parse error"})
+
+    # Summary by condition
+    conditions = sorted(set(e.get("condition", "unknown") for e in manifest))
+    by_condition = {
+        cond: len([e for e in manifest if e.get("condition") == cond])
+        for cond in conditions
+    }
+
+    # Summary by identified card_id
+    card_ids = sorted(set(
+        e.get("scan_result", {}).get("card_id", "unknown") or "unidentified"
+        for e in manifest
+    ))
+
+    return JSONResponse(content={
+        "captures": manifest,
+        "count": len(manifest),
+        "by_condition": by_condition,
+        "unique_cards_identified": len(card_ids),
     })
 
 
@@ -613,6 +728,14 @@ Examples:
         choices=["debug", "info", "warning", "error"],
         help="Logging level (default: info)",
     )
+    parser.add_argument(
+        "--ssl-certfile", default=None,
+        help="Path to SSL certificate file (enables HTTPS)",
+    )
+    parser.add_argument(
+        "--ssl-keyfile", default=None,
+        help="Path to SSL private key file (requires --ssl-certfile)",
+    )
     return parser.parse_args()
 
 
@@ -633,13 +756,19 @@ def main():
     logger.info("  Camera mode: %s", args.camera_mode or "auto-detect")
     if args.mock_dir:
         logger.info("  Mock dir: %s", args.mock_dir)
+    if args.ssl_certfile:
+        logger.info("  SSL: ENABLED (HTTPS)")
 
-    uvicorn.run(
-        app,
-        host=args.host,
-        port=args.port,
-        log_level=args.log_level,
-    )
+    uvicorn_kwargs = {
+        "host": args.host,
+        "port": args.port,
+        "log_level": args.log_level,
+    }
+    if args.ssl_certfile and args.ssl_keyfile:
+        uvicorn_kwargs["ssl_certfile"] = args.ssl_certfile
+        uvicorn_kwargs["ssl_keyfile"] = args.ssl_keyfile
+
+    uvicorn.run(app, **uvicorn_kwargs)
 
 
 if __name__ == "__main__":

@@ -1,38 +1,34 @@
-# ── Environment & secrets ──
-.env
-*.pem
-
-# ── Python ──
+# Python
+venv/
 __pycache__/
 *.pyc
 *.pyo
-venv/
-.venv/
+*.egg-info/
+dist/
+build/
 
-# ── Data files (large, user-specific) ──
-data/card_index.json
-data/hash_database.json
-data/tcgplayer_id_map.json
-data/tcgplayer_shadowless_map.json
-data/pokemon_tcg_data.zip
-data/pokemon_tcg_extract/
+# Data files (large — not suitable for git)
 data/Ref Images/
-data/ref_images_audit.*
-data/scan_results.html
+data/hash_db.pkl
+data/card_index.json
+data/tcgplayer_id_map.json
 
-# ── Debug artifacts ──
-debug_ocr/
+# Test captures (raw images)
+data/test_phone/*.jpg
+data/test_phone/*.jpeg
+data/test_phone/*.png
+# DO commit the manifest for test history
+!data/test_phone/manifest.json
 
-# ── OS junk ──
+# SSL certs (auto-generated, machine-specific)
+certs/
+
+# OS junk
 .DS_Store
 Thumbs.db
 
-# ── Editor ──
+# IDE
+.vscode/
+.idea/
 *.swp
 *.swo
-*~
-.idea/
-.vscode/
-
-# ── Applied patch scripts (should be deleted, not committed) ──
-apply_all_fixes.py

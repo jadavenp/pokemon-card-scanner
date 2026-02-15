@@ -1,0 +1,306 @@
+[
+  {
+    "seq": 1,
+    "file": "capture_001.jpg",
+    "condition": "bare",
+    "timestamp": "2026-02-15T14:27:09",
+    "scan_result": {
+      "card_id": "sv6pt5-88",
+      "name": "Janine's Secret Art",
+      "set_name": "Shrouded Fable",
+      "number": "88",
+      "id_method": "hash",
+      "hash_distance": 7.6,
+      "name_conf": 100.0,
+      "num_conf": 0.0,
+      "price": "$4.94",
+      "stamp_1st": false,
+      "time": 0.91
+    }
+  },
+  {
+    "seq": 2,
+    "file": "capture_002.jpg",
+    "condition": "bare",
+    "timestamp": "2026-02-15T14:27:26",
+    "scan_result": {
+      "card_id": "sv6pt5-59",
+      "name": "Janine's",
+      "set_name": "Shrouded Fable",
+      "number": "59",
+      "id_method": "name_only (12 candidates)",
+      "hash_distance": null,
+      "name_conf": 60.4,
+      "num_conf": 24.3,
+      "price": "$0.07",
+      "stamp_1st": false,
+      "time": 2.14
+    }
+  },
+  {
+    "seq": 3,
+    "file": "capture_003.jpg",
+    "condition": "bare",
+    "timestamp": "2026-02-15T14:29:15",
+    "scan_result": {
+      "card_id": "sv6pt5-88",
+      "name": "Janine's Secret Art",
+      "set_name": "Shrouded Fable",
+      "number": "88",
+      "id_method": "ocr",
+      "hash_distance": null,
+      "name_conf": 82.7,
+      "num_conf": 94.1,
+      "price": "$4.94",
+      "stamp_1st": false,
+      "time": 1.82
+    }
+  },
+  {
+    "seq": 4,
+    "file": "capture_004.jpg",
+    "condition": "sleeve",
+    "timestamp": "2026-02-15T14:29:39",
+    "scan_result": {
+      "card_id": "sv6pt5-59",
+      "name": "Janine's Secret Art",
+      "set_name": "Shrouded Fable",
+      "number": "59",
+      "id_method": "name_only (4 candidates)",
+      "hash_distance": 9.4,
+      "name_conf": 94.1,
+      "num_conf": 36.0,
+      "price": "$0.07",
+      "stamp_1st": false,
+      "time": 2.23
+    }
+  },
+  {
+    "seq": 5,
+    "file": "capture_005.jpg",
+    "condition": "bare",
+    "timestamp": "2026-02-15T14:30:06",
+    "scan_result": {
+      "card_id": "base2-11",
+      "name": "Snorlax",
+      "set_name": "Jungle",
+      "number": "11",
+      "id_method": "name_only (39 candidates)",
+      "hash_distance": null,
+      "name_conf": 99.9,
+      "num_conf": 0.0,
+      "price": "$89.48",
+      "stamp_1st": false,
+      "time": 2.09
+    }
+  },
+  {
+    "seq": 6,
+    "file": "capture_006.jpg",
+    "condition": "sleeve",
+    "timestamp": "2026-02-15T14:30:20",
+    "scan_result": {
+      "card_id": "base2-11",
+      "name": "Snorlax",
+      "set_name": "Jungle",
+      "number": "11",
+      "id_method": "name_only (39 candidates)",
+      "hash_distance": null,
+      "name_conf": 99.6,
+      "num_conf": 0.0,
+      "price": "$89.48",
+      "stamp_1st": false,
+      "time": 1.43
+    }
+  },
+  {
+    "seq": 7,
+    "file": "capture_007.jpg",
+    "condition": "bare",
+    "timestamp": "2026-02-15T14:30:41",
+    "scan_result": {
+      "card_id": "swsh12-132",
+      "name": "Noibat",
+      "set_name": "Silver Tempest",
+      "number": "132",
+      "id_method": "hash",
+      "hash_distance": 4.3,
+      "name_conf": 100.0,
+      "num_conf": 0.0,
+      "price": "$0.07",
+      "stamp_1st": false,
+      "time": 0.81
+    }
+  },
+  {
+    "seq": 8,
+    "file": "capture_008.jpg",
+    "condition": "sleeve",
+    "timestamp": "2026-02-15T14:31:05",
+    "scan_result": {
+      "card_id": "bw3-92",
+      "name": "Noibac",
+      "set_name": "Noble Victories",
+      "number": "92",
+      "id_method": "name_only (6 candidates)",
+      "hash_distance": 12.5,
+      "name_conf": 44.0,
+      "num_conf": 0.0,
+      "price": "$1.27",
+      "stamp_1st": false,
+      "time": 1.81
+    }
+  },
+  {
+    "seq": 9,
+    "file": "capture_009.jpg",
+    "condition": "bare",
+    "timestamp": "2026-02-15T14:58:16",
+    "scan_result": {
+      "card_id": "bw3-92",
+      "name": "Janine s Secret",
+      "set_name": "Noble Victories",
+      "number": "92",
+      "id_method": "name_only (8 candidates)",
+      "hash_distance": null,
+      "name_conf": 74.2,
+      "num_conf": 3.3,
+      "price": "$1.27",
+      "stamp_1st": false,
+      "time": 3.36
+    }
+  },
+  {
+    "seq": 10,
+    "file": "capture_010.jpg",
+    "condition": "bare",
+    "timestamp": "2026-02-15T14:58:35",
+    "scan_result": {
+      "card_id": "sv6pt5-59",
+      "name": "Janine's",
+      "set_name": "Shrouded Fable",
+      "number": "59",
+      "id_method": "name_only (12 candidates)",
+      "hash_distance": null,
+      "name_conf": 91.3,
+      "num_conf": 13.0,
+      "price": "$0.07",
+      "stamp_1st": false,
+      "time": 2.66
+    }
+  },
+  {
+    "seq": 11,
+    "file": "capture_011.jpg",
+    "condition": "bare",
+    "timestamp": "2026-02-15T14:58:49",
+    "scan_result": {
+      "card_id": "sv6pt5-59",
+      "name": "Janine's",
+      "set_name": "Shrouded Fable",
+      "number": "59",
+      "id_method": "name_only (12 candidates)",
+      "hash_distance": 10.9,
+      "name_conf": 75.5,
+      "num_conf": 15.2,
+      "price": "$0.07",
+      "stamp_1st": false,
+      "time": 2.12
+    }
+  },
+  {
+    "seq": 12,
+    "file": "capture_012.jpg",
+    "condition": "sleeve",
+    "timestamp": "2026-02-15T14:59:08",
+    "scan_result": {
+      "card_id": "sv6pt5-59",
+      "name": "Janine's Secret",
+      "set_name": "Shrouded Fable",
+      "number": "59",
+      "id_method": "name_only (12 candidates)",
+      "hash_distance": 12.1,
+      "name_conf": 82.5,
+      "num_conf": 2.8,
+      "price": "$0.07",
+      "stamp_1st": false,
+      "time": 2.06
+    }
+  },
+  {
+    "seq": 13,
+    "file": "capture_013.jpg",
+    "condition": "bare",
+    "timestamp": "2026-02-15T14:59:22",
+    "scan_result": {
+      "card_id": "pgo-55",
+      "name": "Snorlax",
+      "set_name": "pgo",
+      "number": "55",
+      "id_method": "ocr",
+      "hash_distance": null,
+      "name_conf": 95.6,
+      "num_conf": 81.2,
+      "price": "$0.60",
+      "stamp_1st": false,
+      "time": 2.6
+    }
+  },
+  {
+    "seq": 14,
+    "file": "capture_014.jpg",
+    "condition": "bare",
+    "timestamp": "2026-02-15T14:59:38",
+    "scan_result": {
+      "card_id": "bw3-92",
+      "name": "Snerlax",
+      "set_name": "Noble Victories",
+      "number": "92",
+      "id_method": "name_only (6 candidates)",
+      "hash_distance": null,
+      "name_conf": 66.6,
+      "num_conf": 33.0,
+      "price": "$1.27",
+      "stamp_1st": false,
+      "time": 2.44
+    }
+  },
+  {
+    "seq": 15,
+    "file": "capture_015.jpg",
+    "condition": "bare",
+    "timestamp": "2026-02-15T14:59:57",
+    "scan_result": {
+      "card_id": "sv4pt5-68",
+      "name": "Noibat",
+      "set_name": "Paldean Fates",
+      "number": "68",
+      "id_method": "name_only (15 candidates)",
+      "hash_distance": null,
+      "name_conf": 98.3,
+      "num_conf": 56.3,
+      "price": "$0.06",
+      "stamp_1st": false,
+      "time": 3.18
+    }
+  },
+  {
+    "seq": 16,
+    "file": "capture_016.jpg",
+    "condition": "sleeve",
+    "timestamp": "2026-02-15T15:00:08",
+    "scan_result": {
+      "card_id": "sv4pt5-68",
+      "name": "Noibat",
+      "set_name": "Paldean Fates",
+      "number": "68",
+      "id_method": "name_only (15 candidates)",
+      "hash_distance": null,
+      "name_conf": 98.6,
+      "num_conf": 23.0,
+      "price": "$0.06",
+      "stamp_1st": false,
+      "time": 2.24
+    }
+  }
+]

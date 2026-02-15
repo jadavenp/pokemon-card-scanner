@@ -337,8 +337,8 @@ body {
 .btn-danger { border-color: var(--red); color: var(--red); }
 .btn-danger:active { background: var(--red-dim); }
 
-/* Pricing mode compact toggle */
-.pricing-pill {
+/* Compact toggle pills (pricing, test mode, condition) */
+.pricing-pill, .toggle-pill {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -352,7 +352,7 @@ body {
   touch-action: manipulation;
   user-select: none;
 }
-.pricing-pill-dot {
+.pricing-pill-dot, .toggle-pill-dot {
   width: 6px; height: 6px;
   border-radius: 50%;
   background: var(--text-muted);
@@ -362,11 +362,60 @@ body {
   background: var(--green);
   box-shadow: 0 0 4px var(--green);
 }
-.pricing-pill-label {
+.pricing-pill-label, .toggle-pill-label {
   font-weight: 600;
   letter-spacing: 0.5px;
   text-transform: uppercase;
   color: var(--text-dim);
+}
+
+/* Test mode toggle */
+.toggle-pill.active .toggle-pill-dot {
+  background: var(--gold);
+  box-shadow: 0 0 4px var(--gold);
+}
+.toggle-pill.active {
+  border-color: var(--gold-dim);
+}
+
+/* Test mode bar — condition selector shown when test mode is ON */
+.test-bar {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+.test-bar.visible { display: flex; }
+.test-bar-label {
+  font-size: 10px;
+  color: var(--gold);
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  margin-right: 4px;
+}
+.condition-btn {
+  padding: 4px 12px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  color: var(--text-dim);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: all 0.15s;
+}
+.condition-btn.active {
+  background: var(--gold-dim);
+  border-color: var(--gold);
+  color: var(--gold);
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -706,7 +755,19 @@ body {
       <span class="pricing-pill-label" id="pricingLabel">Batch</span>
     </div>
     <button class="btn btn-scan" id="btnScan" onclick="scanCard()">SCAN</button>
+    <div class="toggle-pill" id="testPill" onclick="toggleTestMode()">
+      <div class="toggle-pill-dot"></div>
+      <span class="toggle-pill-label" id="testLabel">Test</span>
+    </div>
     <button class="btn btn-secondary btn-danger" onclick="clearSession()">Clear</button>
+  </div>
+
+  <!-- Test Mode Bar — condition selector (only visible when test mode is ON) -->
+  <div class="test-bar" id="testBar">
+    <span class="test-bar-label">⚡ Test:</span>
+    <button class="condition-btn active" id="condBare" onclick="setCondition('bare')">Bare</button>
+    <button class="condition-btn" id="condSleeve" onclick="setCondition('sleeve')">Sleeve</button>
+    <button class="condition-btn" id="condToploader" onclick="setCondition('toploader')">Toploader</button>
   </div>
 
   <!-- Last Result -->
@@ -748,6 +809,8 @@ body {
 // ─────────────────────────────────────────────────────────────
 const session = { cards: [], totalValue: 0, firstEdCount: 0 };
 let pricingMode = 'batch';
+let testMode = false;
+let testCondition = 'bare';
 let cameraStream = null;
 let scanning = false;
 let serverOnline = false;
@@ -862,16 +925,27 @@ function captureFrame() {
   const sw = Math.min(cropW, srcW - sx);
   const sh = Math.min(cropH, srcH - sy);
 
-  // Resize cropped region to max 800px
+  // Resize cropped region to max 800px on the longest side.
+  // The guide rectangle is portrait (2.5:3.5), so height should always
+  // be the larger dimension. If clamping distorted the aspect, force
+  // portrait card proportions to prevent landscape outputs.
   const MAX_DIM = 800;
   let destW, destH;
+
+  // Guard: if clamping made the crop wider than tall, re-derive
+  // height from the card aspect ratio to maintain portrait orientation.
+  let finalW = sw;
+  let finalH = sh;
   if (sw > sh) {
-    destW = Math.min(sw, MAX_DIM);
-    destH = Math.round(destW * (sh / sw));
-  } else {
-    destH = Math.min(sh, MAX_DIM);
-    destW = Math.round(destH * (sw / sh));
+    // Clamping clipped the height — restore card proportions
+    finalH = Math.round(sw / cardAspect);
+    // But don't exceed the video source
+    if (finalH > srcH - sy) finalH = srcH - sy;
   }
+
+  // Scale so the longest dimension (height) fits within MAX_DIM
+  destH = Math.min(finalH, MAX_DIM);
+  destW = Math.round(destH * (finalW / finalH));
 
   canvas.width = destW;
   canvas.height = destH;
@@ -921,7 +995,11 @@ async function scanCard() {
     formData.append('image', blob, 'card.jpg');
 
     const useCache = pricingMode === 'batch';
-    const response = await fetch(`/scan/upload?use_cache=${useCache}`, {
+    let uploadUrl = `/scan/upload?use_cache=${useCache}`;
+    if (testMode) {
+      uploadUrl += `&test_mode=true&condition=${testCondition}`;
+    }
+    const response = await fetch(uploadUrl, {
       method: 'POST',
       body: formData,
     });
@@ -937,6 +1015,11 @@ async function scanCard() {
     // Add to session
     addCardToSession(card);
     showLastResult(card);
+
+    // Show test capture confirmation
+    if (data.test_capture) {
+      showToast(`Test saved: ${data.test_capture}`);
+    }
 
     // Mark server connected
     setServerStatus(true);
@@ -1125,6 +1208,25 @@ function togglePricing() {
     pill.classList.remove('single');
     label.textContent = 'Batch';
   }
+}
+
+function toggleTestMode() {
+  testMode = !testMode;
+  const pill = document.getElementById('testPill');
+  const bar = document.getElementById('testBar');
+  if (testMode) {
+    pill.classList.add('active');
+    bar.classList.add('visible');
+  } else {
+    pill.classList.remove('active');
+    bar.classList.remove('visible');
+  }
+}
+
+function setCondition(cond) {
+  testCondition = cond;
+  document.querySelectorAll('.condition-btn').forEach(btn => btn.classList.remove('active'));
+  document.getElementById('cond' + cond.charAt(0).toUpperCase() + cond.slice(1)).classList.add('active');
 }
 
 // ─────────────────────────────────────────────────────────────

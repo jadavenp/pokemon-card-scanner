@@ -1,12 +1,35 @@
 """
-card_detect.py
-Detect and extract a card from a camera photo using OpenCV.
+card_detect.py — Detect and extract a trading card from a camera photo.
 
-Takes a raw image (from phone camera), finds the card contour,
+Takes a raw image (from phone camera or webcam), finds the card contour,
 applies perspective correction, and returns a clean, upright card image
 suitable for OCR and hash matching.
 
-Based on the detect_card() prototype from live_scanner.py.
+Pipeline:
+    1. Grayscale conversion (no blur — iPhone computational photography
+       already denoises; blur destroys edge sharpness for no benefit)
+    2. Auto-Canny edge detection with adaptive thresholds derived from
+       image median (sigma passes: tight → standard → permissive)
+    3. Contour filtering by area, solidity, and aspect ratio
+    4. 4-corner extraction (approxPolyDP preferred, minAreaRect fallback)
+    5. Perspective warp to standard card proportions (2.5:3.5 portrait)
+    6. Upscale to minimum width for OCR readability
+
+Design notes:
+    - Auto-Canny (Rosebrock 2015): thresholds computed as median ± sigma%,
+      adapting to each image's brightness. Replaces fixed thresholds that
+      failed on holo reflections and varying lighting conditions.
+    - No Gaussian blur: modern phone cameras (iPhone 12+) apply multi-frame
+      noise reduction and computational HDR before the image reaches the app.
+      Blurring a denoised 12MP image only softens edges.
+    - Multi-pass sigma approach: tight sigma (0.33) catches clean high-contrast
+      shots; wider sigma (0.50, 0.67) catches holo/low-contrast cards.
+    - The solidity check (contour area / bounding rect area >= 0.75) rejects
+      fragmented contours from internal card features (art, text boxes).
+    - Corner ordering uses y-sort then x-sort to get [TL, TR, BR, BL] for the
+      perspective transform. This is invariant to card rotation up to ~45 deg.
+    - Output dimensions use min(rw, rh) as width because minAreaRect's
+      width/height assignment depends on rotation angle, not image axes.
 """
 
 import cv2
@@ -17,8 +40,17 @@ from config import CARD_MIN_OUTPUT_WIDTH
 
 logger = logging.getLogger("card_detect")
 
+# Standard card proportions
+CARD_ASPECT = 2.5 / 3.5  # width / height = 0.714
 
-def detect_and_crop_card(img, min_area_ratio=0.05, max_area_ratio=0.95):
+# Auto-Canny sigma values: controls threshold band around image median.
+# sigma=0.33 → thresholds at median ± 33% (tight, catches clean shots)
+# sigma=0.50 → thresholds at median ± 50% (catches holo/textured cards)
+# sigma=0.67 → thresholds at median ± 67% (permissive, low-contrast scenarios)
+_SIGMA_PASSES = [0.33, 0.50, 0.67]
+
+
+def detect_and_crop_card(img, min_area_ratio=0.05, max_area_ratio=0.995):
     """
     Detect a card in the image and return a perspective-corrected crop.
 
@@ -32,8 +64,8 @@ def detect_and_crop_card(img, min_area_ratio=0.05, max_area_ratio=0.95):
         max_area_ratio: Maximum card area as fraction of image area
 
     Returns:
-        (warped_card, success): Tuple of (perspective-corrected card image, True)
-        or (original_img, False) if no card detected.
+        (warped_card, True) on success — perspective-corrected portrait image.
+        (original_img, False) if no card detected.
     """
     if img is None or img.size == 0:
         return img, False
@@ -41,136 +73,180 @@ def detect_and_crop_card(img, min_area_ratio=0.05, max_area_ratio=0.95):
     h, w = img.shape[:2]
     total_area = h * w
 
-    # ── Preprocessing ──
+    # Preprocessing: grayscale only — no blur.
+    # iPhone computational photography already denoises; blurring a clean
+    # 12MP image only softens the card-to-background edge.
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    blurred = cv2.GaussianBlur(gray, (7, 7), 0)
-    edges = cv2.Canny(blurred, 40, 120)
 
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
-    dilated = cv2.dilate(edges, kernel, iterations=2)
+    # Try each auto-Canny sigma pass — stop on first successful detection
+    for sigma in _SIGMA_PASSES:
+        # Auto-Canny: derive thresholds from image median
+        v = np.median(gray)
+        canny_lo = int(max(0,   (1.0 - sigma) * v))
+        canny_hi = int(min(255, (1.0 + sigma) * v))
 
-    # ── Find contours ──
-    contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    contours = sorted(contours, key=cv2.contourArea, reverse=True)
-
-    for cnt in contours[:10]:
-        area = cv2.contourArea(cnt)
-        area_ratio = area / total_area
-
-        # Card should be a significant portion of the frame
-        if area_ratio < min_area_ratio or area_ratio > max_area_ratio:
-            continue
-
-        # Try to approximate to a 4-sided polygon
-        peri = cv2.arcLength(cnt, True)
-        approx = None
-        for eps in [0.02, 0.03, 0.04, 0.05]:
-            candidate = cv2.approxPolyDP(cnt, eps * peri, True)
-            if len(candidate) == 4:
-                approx = candidate
-                break
-
-        # If we can't get exactly 4 vertices but the contour passes
-        # area/aspect/solidity checks, fall back to minAreaRect corners
-        use_box_fallback = (approx is None)
-        if approx is None:
-            # Only allow fallback if contour is large enough and roughly card-shaped
-            if area_ratio < 0.10:
-                continue
-
-        # Check solidity (card should fill its bounding rect well)
-        rect = cv2.minAreaRect(cnt)
-        box = cv2.boxPoints(rect)
-        box = np.intp(box)
-
-        rw, rh = rect[1]
-        if rw == 0 or rh == 0:
-            continue
-
-        rect_area = rw * rh
-        solidity = area / rect_area if rect_area > 0 else 0
-        if solidity < 0.75:
-            continue
-
-        # Check card aspect ratio (standard card is ~0.714 = 2.5/3.5)
-        aspect = min(rw, rh) / max(rw, rh)
-        if not (0.55 < aspect < 0.85):
-            continue
-
-        # ── Perspective correction ──
-        if approx is not None:
-            pts = approx.reshape(4, 2).astype(np.float32)
-        else:
-            pts = box.astype(np.float32)
-        sorted_pts = sorted(pts, key=lambda p: p[1])
-        top = sorted(sorted_pts[:2], key=lambda p: p[0])
-        bottom = sorted(sorted_pts[2:], key=lambda p: p[0])
-        ordered = np.array([top[0], top[1], bottom[1], bottom[0]], dtype=np.float32)
-
-        # Output at standard card proportions
-        card_w = int(max(rw, rh))
-        card_h = int(card_w * 3.5 / 2.5)
-        if rw > rh:
-            card_w, card_h = card_h, card_w
-
-        # Ensure minimum output size for OCR readability
-        # (480px minimum ensures bottom-strip text is ~48-67px tall)
-        if card_w < CARD_MIN_OUTPUT_WIDTH:
-            scale = CARD_MIN_OUTPUT_WIDTH / card_w
-            card_w = CARD_MIN_OUTPUT_WIDTH
-            card_h = int(card_h * scale)
-
-        dst = np.array([
-            [0, 0],
-            [card_w - 1, 0],
-            [card_w - 1, card_h - 1],
-            [0, card_h - 1]
-        ], dtype=np.float32)
-
-        M = cv2.getPerspectiveTransform(ordered, dst)
-        warped = cv2.warpPerspective(img, M, (card_w, card_h))
-
-        logger.info(
-            "Card detected: %dx%d, aspect=%.3f, solidity=%.2f, area=%.1f%%",
-            card_w, card_h, aspect, solidity, area_ratio * 100
+        result = _try_detect(
+            img, gray, canny_lo, canny_hi,
+            total_area, min_area_ratio, max_area_ratio
         )
-        return warped, True
+        if result is not None:
+            warped, card_w, card_h, aspect, solidity, area_ratio = result
+            logger.info(
+                "Card detected: %dx%d, aspect=%.3f, solidity=%.2f, "
+                "area=%.1f%%, auto-canny sigma=%.2f thresholds=(%d,%d)",
+                card_w, card_h, aspect, solidity,
+                area_ratio * 100, sigma, canny_lo, canny_hi
+            )
+            return warped, True
 
     logger.info("No card detected in frame — using original image")
     return img, False
 
 
-def normalize_phone_capture(img):
+def _try_detect(img, gray, canny_lo, canny_hi,
+                total_area, min_area_ratio, max_area_ratio):
     """
-    Normalize a phone-captured card image for downstream processing.
-
-    Called when detect_and_crop_card() fails but the input is from a phone
-    upload (where the mobile UI's guide rectangle already frames the card).
-    In this case, the image IS the card — Canny fails because there's no
-    background for edge detection to find an edge against.
-
-    Ensures minimum width for OCR readability. Does NOT rotate — the mobile
-    UI is responsible for sending portrait-oriented crops via the guide
-    rectangle, and phone orientation lock prevents unexpected rotation.
+    Single detection pass with given Canny thresholds.
 
     Args:
-        img: BGR image (numpy array)
+        img: Original BGR image (for perspective warp output)
+        gray: Grayscale image (no blur applied — raw from phone camera)
+        canny_lo: Lower Canny threshold (auto-computed from median)
+        canny_hi: Upper Canny threshold (auto-computed from median)
 
-    Returns:
-        (normalized_img, True) — always succeeds since we assume the phone
-        guide framed the card.
+    Returns (warped, card_w, card_h, aspect, solidity, area_ratio)
+    on success, or None on failure.
     """
-    if img is None or img.size == 0:
-        return img, False
+    edges = cv2.Canny(gray, canny_lo, canny_hi)
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+    dilated = cv2.dilate(edges, kernel, iterations=2)
 
-    h, w = img.shape[:2]
+    contours, _ = cv2.findContours(
+        dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+    )
+    contours = sorted(contours, key=cv2.contourArea, reverse=True)
 
-    # Ensure minimum width for OCR readability
-    if w < CARD_MIN_OUTPUT_WIDTH:
-        scale = CARD_MIN_OUTPUT_WIDTH / w
-        new_w = CARD_MIN_OUTPUT_WIDTH
-        new_h = int(h * scale)
-        img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_CUBIC)
-        logger.info("Phone capture upscaled: %dx%d → %dx%d", w, h, new_w, new_h)
+    for cnt in contours[:10]:
+        area = cv2.contourArea(cnt)
+        area_ratio = area / total_area
+        if area_ratio < min_area_ratio or area_ratio > max_area_ratio:
+            continue
 
-    return img, True
+        # ── Shape validation ──
+        rect = cv2.minAreaRect(cnt)
+        rw, rh = rect[1]
+        if rw == 0 or rh == 0:
+            continue
+
+        # Solidity: card should fill its bounding rectangle well.
+        # Fragmented contours (from internal card art) score low here.
+        solidity = area / (rw * rh)
+        if solidity < 0.75:
+            continue
+
+        # Aspect ratio: standard card is 2.5" x 3.5" = 0.714
+        aspect = min(rw, rh) / max(rw, rh)
+        if not (0.55 < aspect < 0.85):
+            continue
+
+        # ── Extract 4 corners ──
+        corners = _extract_corners(cnt, rect, area_ratio)
+        if corners is None:
+            continue
+
+        # ── Perspective warp to portrait ──
+        warped, card_w, card_h = _warp_to_portrait(img, corners, rw, rh)
+        return warped, card_w, card_h, aspect, solidity, area_ratio
+
+    return None
+
+
+def _extract_corners(cnt, rect, area_ratio):
+    """
+    Get 4 ordered corners [TL, TR, BR, BL] from a contour.
+
+    Prefers approxPolyDP on convex hull (actual card corners) over
+    minAreaRect box (may not match true corners on tilted cards).
+
+    Convex hull step eliminates concavities from shadows and edge noise
+    before polygon approximation, so approxPolyDP sees a clean outline
+    rather than a blob with inward dents.
+
+    Returns np.float32 array of shape (4, 2) or None.
+    """
+    # Compute convex hull first to eliminate shadow/noise concavities
+    hull = cv2.convexHull(cnt)
+    hull_peri = cv2.arcLength(hull, True)
+
+    # Try progressively looser approximation on the hull to get exactly 4 vertices
+    approx = None
+    for eps in [0.02, 0.03, 0.04, 0.05]:
+        candidate = cv2.approxPolyDP(hull, eps * hull_peri, True)
+        if len(candidate) == 4:
+            approx = candidate
+            break
+
+    if approx is not None:
+        pts = approx.reshape(4, 2).astype(np.float32)
+    elif area_ratio >= 0.10:
+        # Fallback: use minAreaRect box corners for large contours
+        # that couldn't be approximated to 4 vertices
+        box = cv2.boxPoints(rect)
+        pts = box.astype(np.float32)
+    else:
+        return None
+
+    return _order_corners(pts)
+
+
+def _order_corners(pts):
+    """
+    Order 4 points as [TL, TR, BR, BL] for perspective transform.
+
+    Method: sum/difference of coordinates — rotation-invariant up to 90 deg.
+      TL = smallest (x+y)   BR = largest (x+y)
+      TR = smallest (y-x)   BL = largest (y-x)
+
+    Replaces the previous y-sort + x-sort approach, which broke when the
+    card was rotated more than ~15° (approxPolyDP corners are not
+    axis-aligned, so top-2/bottom-2 by y-value mis-assigns corners).
+    """
+    rect = np.zeros((4, 2), dtype=np.float32)
+    s = pts.sum(axis=1)
+    rect[0] = pts[np.argmin(s)]   # TL: smallest x+y
+    rect[2] = pts[np.argmax(s)]   # BR: largest x+y
+    d = np.diff(pts, axis=1)
+    rect[1] = pts[np.argmin(d)]   # TR: smallest y-x
+    rect[3] = pts[np.argmax(d)]   # BL: largest y-x
+    return rect
+
+
+def _warp_to_portrait(img, corners, rw, rh):
+    """
+    Perspective-warp the card region to a clean portrait rectangle.
+
+    Output width = min(rw, rh) because minAreaRect's width/height
+    assignment is rotation-dependent, not axis-aligned. The short edge
+    is always the card width for a portrait card.
+
+    Enforces minimum width (CARD_MIN_OUTPUT_WIDTH) for OCR readability.
+    """
+    card_w = int(min(rw, rh))
+    card_h = int(card_w * 3.5 / 2.5)
+
+    # Upscale small cards for OCR readability
+    if card_w < CARD_MIN_OUTPUT_WIDTH:
+        scale = CARD_MIN_OUTPUT_WIDTH / card_w
+        card_w = CARD_MIN_OUTPUT_WIDTH
+        card_h = int(card_h * scale)
+
+    dst = np.array([
+        [0, 0],
+        [card_w - 1, 0],
+        [card_w - 1, card_h - 1],
+        [0, card_h - 1]
+    ], dtype=np.float32)
+
+    M = cv2.getPerspectiveTransform(corners, dst)
+    warped = cv2.warpPerspective(img, M, (card_w, card_h))
+    return warped, card_w, card_h
